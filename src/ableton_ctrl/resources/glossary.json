@@ -1,0 +1,27 @@
+{
+  "source_kind": "learning_metadata",
+  "entries": [
+    {"term": "Live Set", "description": "The complete Ableton Live project currently open.", "related_types": ["Song"], "source_kind": "learning_metadata"},
+    {"term": "Session View", "description": "A grid for launching clips and scenes in a nonlinear performance workflow.", "related_types": ["Song", "Scene", "ClipSlot"], "source_kind": "learning_metadata"},
+    {"term": "Arrangement View", "description": "A linear timeline for composing and editing a song.", "related_types": ["Song", "Track", "Clip"], "source_kind": "learning_metadata"},
+    {"term": "scene", "description": "A horizontal row of clip slots that can be launched together.", "related_types": ["Scene", "ClipSlot"], "source_kind": "learning_metadata"},
+    {"term": "track", "description": "A channel that holds clips, devices, routing, and mixer controls.", "related_types": ["Track"], "source_kind": "learning_metadata"},
+    {"term": "return track", "description": "A shared effects channel fed by track send controls.", "related_types": ["Track"], "source_kind": "learning_metadata"},
+    {"term": "master track", "description": "The final mix channel through which the Live Set output passes.", "related_types": ["Track"], "source_kind": "learning_metadata"},
+    {"term": "clip slot", "description": "One Session View cell that may contain and launch a clip.", "related_types": ["ClipSlot"], "source_kind": "learning_metadata"},
+    {"term": "audio clip", "description": "A clip that references and plays sampled audio.", "related_types": ["Clip"], "source_kind": "learning_metadata"},
+    {"term": "MIDI clip", "description": "A clip containing notes and MIDI automation.", "related_types": ["Clip"], "source_kind": "learning_metadata"},
+    {"term": "device", "description": "An instrument, audio effect, or MIDI effect in a track device chain.", "related_types": ["Device"], "source_kind": "learning_metadata"},
+    {"term": "device parameter", "description": "One readable control or setting exposed by a device.", "related_types": ["DeviceParameter"], "source_kind": "learning_metadata"},
+    {"term": "mixer", "description": "Track controls such as volume, pan, mute, solo, and sends.", "related_types": ["MixerDevice", "Track"], "source_kind": "learning_metadata"},
+    {"term": "routing", "description": "The configured source and destination of a track's audio or MIDI signal.", "related_types": ["Track"], "source_kind": "learning_metadata"},
+    {"term": "automation", "description": "Recorded changes to a parameter over musical time.", "related_types": ["Clip", "DeviceParameter"], "source_kind": "learning_metadata"},
+    {"term": "selection", "description": "The object or time range currently selected in Live's interface.", "related_types": ["Song", "View"], "source_kind": "learning_metadata"},
+    {"term": "beat time", "description": "Musical time measured in beats rather than wall-clock seconds.", "related_types": ["Song", "Clip"], "source_kind": "learning_metadata"},
+    {"term": "decibel", "description": "A logarithmic unit commonly used for audio level or gain.", "related_types": ["DeviceParameter", "MixerDevice"], "source_kind": "learning_metadata"},
+    {"term": "normalized parameter", "description": "A parameter represented on a unitless zero-to-one scale.", "related_types": ["DeviceParameter"], "source_kind": "learning_metadata"},
+    {"term": "revision", "description": "A monotonically increasing bridge version for one Live session.", "related_types": ["BridgeMetadata"], "source_kind": "learning_metadata"},
+    {"term": "capture time", "description": "The wall-clock timestamp when an observation batch was recorded.", "related_types": ["BridgeMetadata"], "source_kind": "learning_metadata"},
+    {"term": "completeness", "description": "Whether the returned graph portion is complete or intentionally partial.", "related_types": ["BridgeMetadata"], "source_kind": "learning_metadata"}
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "source_kind": "learning_metadata",
+  "target": {
+    "product": "Ableton Live Intro",
+    "version": "12.4.2"
+  },
+  "limitations": [
+    "The control-surface API is undocumented and may change without notice.",
+    "Live Intro does not provide Max for Live, so this integration does not use Max for Live.",
+    "Coverage depends on runtime discovery of members safely readable in the installed build.",
+    "The interface does not guarantee access to raw audio samples or raw MIDI event data.",
+    "Every supported release requires an explicit generated coverage report; claims must not rely on the manifest alone."
+  ]
+}

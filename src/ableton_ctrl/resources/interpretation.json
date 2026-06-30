@@ -1,0 +1,12 @@
+{
+  "source_kind": "learning_metadata",
+  "entries": [
+    {"term": "revision", "description": "Compare revisions only within the same session_id.", "related_types": ["BridgeMetadata"], "source_kind": "learning_metadata"},
+    {"term": "capture time", "description": "Use captured_at and cache_age_seconds to judge observation freshness.", "related_types": ["BridgeMetadata"], "source_kind": "learning_metadata"},
+    {"term": "completeness", "description": "Partial means more traversal or unavailable members may remain; it does not imply a value.", "related_types": ["BridgeMetadata", "MemberOutcome"], "source_kind": "learning_metadata"},
+    {"term": "read outcome", "description": "Unavailable, read_failed, and excluded are observations, not inferred values.", "related_types": ["MemberOutcome"], "source_kind": "learning_metadata"},
+    {"term": "object type", "description": "The runtime category reported for an observed Live object; availability may vary by edition and version.", "related_types": ["ObjectView", "TypeSchema"], "source_kind": "learning_metadata"},
+    {"term": "property", "description": "A captured readable value on an object; interpret it with its capture time, unit metadata, and read outcome.", "related_types": ["ObjectView", "MemberSchema"], "source_kind": "learning_metadata"},
+    {"term": "relationship", "description": "A named link from one observed object to other object IDs; traverse it with the reported revision and pagination fields.", "related_types": ["ObjectView", "RelationshipPage"], "source_kind": "learning_metadata"}
+  ]
+}
