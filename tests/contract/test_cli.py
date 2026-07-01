@@ -118,3 +118,27 @@ def test_invalid_action_bounds_return_structured_error(payload: dict[str, Any], 
     assert response["error"]["message"] == f"Invalid fields for action '{payload['action']}'."
     assert response["error"]["recovery"]["action"] == "fix_action_fields"
     assert response["error"]["recovery"]["details"][0]["field"] == field_name
+
+
+def test_pyproject_registers_ableton_ctrl_console_script() -> None:
+    import tomllib
+
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    assert pyproject["project"]["scripts"]["ableton-ctrl"] == "ableton_ctrl.cli:main"
+
+
+def test_valid_snapshot_dispatch_uses_existing_bridge_client_error(tmp_path: Path) -> None:
+    result = run_cli('{"action":"snapshot","depth":1,"page_size":20}', config_dir=tmp_path)
+
+    assert result.returncode == 0
+    response = stdout_json(result)
+    assert response == {
+        "protocol_version": 1,
+        "ok": False,
+        "completeness": "unavailable",
+        "error": {
+            "code": "bridge_unavailable",
+            "message": "The local Ableton bridge is unavailable.",
+            "recovery": {"action": "start_or_restart_bridge"},
+        },
+    }
