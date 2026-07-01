@@ -115,7 +115,6 @@ def test_unknown_action_returns_structured_error() -> None:
         ({"action": "children", "relationship": "tracks", "revision": 1}, "object_id"),
         ({"action": "children", "object_id": "obj", "revision": 1}, "relationship"),
         ({"action": "children", "object_id": "obj", "relationship": "tracks"}, "revision"),
-        ({"action": "changes", "session_id": "s1"}, "after_revision"),
         ({"action": "resource"}, "name"),
     ],
 )
@@ -250,6 +249,23 @@ def test_valid_object_dispatch_uses_existing_bridge_client_error(tmp_path: Path)
 
 def test_valid_search_dispatch_uses_existing_bridge_client_error(tmp_path: Path) -> None:
     result = run_cli('{"action":"search","name":"track"}', config_dir=tmp_path)
+
+    assert result.returncode == 0
+    response = stdout_json(result)
+    assert response == {
+        "protocol_version": 1,
+        "ok": False,
+        "completeness": "unavailable",
+        "error": {
+            "code": "bridge_unavailable",
+            "message": "The local Ableton bridge is unavailable.",
+            "recovery": {"action": "start_or_restart_bridge"},
+        },
+    }
+
+
+def test_valid_schema_dispatch_uses_existing_bridge_client_error(tmp_path: Path) -> None:
+    result = run_cli('{"action":"schema"}', config_dir=tmp_path)
 
     assert result.returncode == 0
     response = stdout_json(result)
@@ -453,6 +469,87 @@ async def test_search_cli_filters_fixture_objects_and_preserves_metadata(
     assert response["result"]["continuation"] == "1:1"
 
 
+async def test_schema_cli_returns_unfiltered_runtime_metadata(
+    tmp_path: Path,
+) -> None:
+    bridge = BridgeServer(host="127.0.0.1", port=0, secret=SECRET, store=GraphStore())
+    await bridge.start()
+    write_config(tmp_path, bridge.port)
+    _reader, adapter = await apply_fixture(bridge)
+    try:
+        result = await asyncio.to_thread(
+            run_cli,
+            json.dumps({"action": "schema"}),
+            config_dir=tmp_path,
+        )
+    finally:
+        adapter.close()
+        await adapter.wait_closed()
+        await bridge.close()
+
+    assert result.returncode == 0
+    response = stdout_json(result)
+    assert response["ok"] is True
+    assert response["live_version"] == "12.4.2"
+    assert response["session_id"] == "s1"
+    assert response["bridge_revision"] == 1
+    assert response["completeness"] in {"complete", "partial"}
+    assert response["cache_age_seconds"] >= 0
+    assert response["captured_at"] == response["result"]["captured_at"]
+    assert response["bridge_revision"] == response["result"]["bridge_revision"]
+    assert response["result"]["kind"] == "schema"
+    assert [item["normalized_type"] for item in response["result"]["types"]] == ["song", "track"]
+    track = response["result"]["types"][1]
+    assert track["type"] == "Track"
+    assert track["object_count"] == 1
+    assert track["members"] == [
+        {
+            "name": "name",
+            "kind": "property",
+            "runtime_available": True,
+            "observed_count": 1,
+            "unavailable_count": 0,
+            "read_failed_count": 0,
+            "excluded_count": 0,
+            "manifest_metadata": None,
+        }
+    ]
+
+
+async def test_schema_cli_filters_by_object_type_and_preserves_metadata(
+    tmp_path: Path,
+) -> None:
+    bridge = BridgeServer(host="127.0.0.1", port=0, secret=SECRET, store=GraphStore())
+    await bridge.start()
+    write_config(tmp_path, bridge.port)
+    _reader, adapter = await apply_fixture(bridge)
+    try:
+        result = await asyncio.to_thread(
+            run_cli,
+            json.dumps({"action": "schema", "object_type": "Track"}),
+            config_dir=tmp_path,
+        )
+    finally:
+        adapter.close()
+        await adapter.wait_closed()
+        await bridge.close()
+
+    assert result.returncode == 0
+    response = stdout_json(result)
+    assert response["ok"] is True
+    assert response["live_version"] == "12.4.2"
+    assert response["session_id"] == "s1"
+    assert response["bridge_revision"] == 1
+    assert response["completeness"] in {"complete", "partial"}
+    assert response["cache_age_seconds"] >= 0
+    assert response["captured_at"] == response["result"]["captured_at"]
+    assert response["bridge_revision"] == response["result"]["bridge_revision"]
+    assert response["result"]["kind"] == "schema"
+    assert [item["normalized_type"] for item in response["result"]["types"]] == ["track"]
+    assert response["result"]["types"][0]["members"][0]["name"] == "name"
+    assert response["result"]["types"][0]["members"][0]["runtime_available"] is True
+
+
 async def test_children_cli_invalid_revision_preserves_bridge_error(tmp_path: Path) -> None:
     bridge = BridgeServer(host="127.0.0.1", port=0, secret=SECRET, store=GraphStore())
     await bridge.start()
@@ -586,6 +683,161 @@ async def test_snapshot_cli_preserves_adapter_runtime_metadata(tmp_path: Path) -
     }
 
 
+async def test_changes_cli_persists_implicit_cursor_across_processes(tmp_path: Path) -> None:
+    bridge = BridgeServer(host="127.0.0.1", port=0, secret=SECRET, store=GraphStore())
+    await bridge.start()
+    write_config(tmp_path, bridge.port)
+    reader, adapter = await apply_fixture(bridge, named_fixture_batch("Cursor Test Set"))
+    try:
+        first = await asyncio.to_thread(
+            run_cli,
+            json.dumps({"action": "changes"}),
+            config_dir=tmp_path,
+        )
+        changed = named_fixture_batch("Cursor Test Set")
+        changed["observations"][1]["properties"] = {"name": "Renamed Track"}
+        await send_update(reader, adapter, changed, expected_revision=2)
+        second = await asyncio.to_thread(
+            run_cli,
+            json.dumps({"action": "changes"}),
+            config_dir=tmp_path,
+        )
+        third = await asyncio.to_thread(
+            run_cli,
+            json.dumps({"action": "changes"}),
+            config_dir=tmp_path,
+        )
+    finally:
+        adapter.close()
+        await adapter.wait_closed()
+        await bridge.close()
+
+    assert first.returncode == 0
+    first_response = stdout_json(first)
+    assert first_response["ok"] is True
+    assert [item["revision"] for item in first_response["result"]["changes"]] == [1]
+    assert first_response["result"]["next_revision"] == 1
+
+    assert second.returncode == 0
+    second_response = stdout_json(second)
+    assert second_response["ok"] is True
+    assert [item["revision"] for item in second_response["result"]["changes"]] == [2]
+    assert second_response["result"]["next_revision"] == 2
+
+    assert third.returncode == 0
+    third_response = stdout_json(third)
+    assert third_response["ok"] is True
+    assert third_response["result"]["changes"] == []
+    assert third_response["result"]["next_revision"] == 2
+
+
+async def test_changes_cli_implicit_cursors_are_keyed_by_set_name_only(tmp_path: Path) -> None:
+    first_bridge = BridgeServer(host="127.0.0.1", port=0, secret=SECRET, store=GraphStore())
+    await first_bridge.start()
+    write_config(tmp_path, first_bridge.port)
+    _first_reader, first_adapter = await apply_fixture(first_bridge, named_fixture_batch("Set A"))
+    try:
+        first = await asyncio.to_thread(
+            run_cli,
+            json.dumps({"action": "changes"}),
+            config_dir=tmp_path,
+        )
+    finally:
+        first_adapter.close()
+        await first_adapter.wait_closed()
+        await first_bridge.close()
+
+    second_bridge = BridgeServer(host="127.0.0.1", port=0, secret=SECRET, store=GraphStore())
+    await second_bridge.start()
+    write_config(tmp_path, second_bridge.port)
+    _second_reader, second_adapter = await apply_fixture(
+        second_bridge, named_fixture_batch("Set B")
+    )
+    try:
+        second = await asyncio.to_thread(
+            run_cli,
+            json.dumps({"action": "changes"}),
+            config_dir=tmp_path,
+        )
+    finally:
+        second_adapter.close()
+        await second_adapter.wait_closed()
+        await second_bridge.close()
+
+    assert stdout_json(first)["result"]["next_revision"] == 1
+    second_response = stdout_json(second)
+    assert second_response["ok"] is True
+    assert [item["revision"] for item in second_response["result"]["changes"]] == [1]
+    cursor_files = sorted((tmp_path / "cursors" / "changes").glob("*.json"))
+    assert [path.name for path in cursor_files] == ["Set%20A.json", "Set%20B.json"]
+
+
+async def test_changes_cli_missing_set_name_returns_structured_error_without_cursor(
+    tmp_path: Path,
+) -> None:
+    bridge = BridgeServer(host="127.0.0.1", port=0, secret=SECRET, store=GraphStore())
+    await bridge.start()
+    write_config(tmp_path, bridge.port)
+    _reader, adapter = await apply_fixture(bridge)
+    try:
+        result = await asyncio.to_thread(
+            run_cli,
+            json.dumps({"action": "changes"}),
+            config_dir=tmp_path,
+        )
+    finally:
+        adapter.close()
+        await adapter.wait_closed()
+        await bridge.close()
+
+    assert result.returncode == 0
+    response = stdout_json(result)
+    assert response == {
+        "protocol_version": 1,
+        "ok": False,
+        "completeness": "unavailable",
+        "error": {
+            "code": "stale_state",
+            "message": "The current Ableton Live Set name could not be determined.",
+            "recovery": {"action": "save_or_name_current_live_set"},
+        },
+    }
+    assert not (tmp_path / "cursors").exists()
+
+
+async def test_changes_cli_explicit_after_revision_is_nonmutating(tmp_path: Path) -> None:
+    bridge = BridgeServer(host="127.0.0.1", port=0, secret=SECRET, store=GraphStore())
+    await bridge.start()
+    write_config(tmp_path, bridge.port)
+    _reader, adapter = await apply_fixture(bridge, named_fixture_batch("Explicit Set"))
+    try:
+        explicit = await asyncio.to_thread(
+            run_cli,
+            json.dumps({"action": "changes", "session_id": "s1", "after_revision": 0}),
+            config_dir=tmp_path,
+        )
+        explicit_cursor_exists = (tmp_path / "cursors").exists()
+        implicit = await asyncio.to_thread(
+            run_cli,
+            json.dumps({"action": "changes"}),
+            config_dir=tmp_path,
+        )
+    finally:
+        adapter.close()
+        await adapter.wait_closed()
+        await bridge.close()
+
+    explicit_response = stdout_json(explicit)
+    assert explicit_response["ok"] is True
+    assert [item["revision"] for item in explicit_response["result"]["changes"]] == [1]
+    assert explicit_cursor_exists is False
+
+    implicit_response = stdout_json(implicit)
+    assert implicit_response["ok"] is True
+    assert [item["revision"] for item in implicit_response["result"]["changes"]] == [1]
+    assert (tmp_path / "cursors" / "changes" / "Explicit%20Set.json").exists()
+
+
 async def apply_fixture(
     bridge: BridgeServer,
     batch: dict[str, Any] | None = None,
@@ -609,6 +861,12 @@ async def apply_fixture(
 def fixture_batch() -> dict[str, Any]:
     batch: dict[str, Any] = json.loads(FIXTURE.read_text())
     batch["session_id"] = "s1"
+    return batch
+
+
+def named_fixture_batch(set_name: str) -> dict[str, Any]:
+    batch = fixture_batch()
+    batch["observations"][0]["properties"]["name"] = set_name
     return batch
 
 

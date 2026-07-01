@@ -8,12 +8,14 @@ import os
 import sys
 from pathlib import Path
 from typing import Any, Literal, Sequence, cast
+from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from ableton_ctrl.config import load_or_create_config
+from ableton_ctrl.config import DEFAULT_CONFIG_DIRECTORY, load_or_create_config
 from ableton_ctrl.contracts import (
     AdapterRuntimeMetadata,
+    ChangesPayload,
     ChangesQuery,
     ErrorCode,
     GetObjectQuery,
@@ -132,9 +134,15 @@ class SchemaCommand(CliModel):
 
 class ChangesCommand(CliModel):
     action: Literal["changes"]
-    session_id: str = Field(min_length=1)
-    after_revision: int = Field(ge=0)
+    session_id: str | None = Field(default=None, min_length=1)
+    after_revision: int | None = Field(default=None, ge=0)
     limit: int = Field(default=100, ge=1, le=500)
+
+    @model_validator(mode="after")
+    def require_session_for_explicit_cursor(self) -> "ChangesCommand":
+        if self.after_revision is not None and self.session_id is None:
+            raise ValueError("session_id is required when after_revision is provided")
+        return self
 
 
 class ResourceCommand(CliModel):
@@ -278,6 +286,8 @@ def build_query(command: CliCommand) -> QueryRequest:
     if isinstance(command, SchemaCommand):
         return SchemaQuery(type="schema", object_type=command.object_type)
     if isinstance(command, ChangesCommand):
+        if command.session_id is None or command.after_revision is None:
+            raise ValueError("implicit changes commands are dispatched by run()")
         return ChangesQuery(
             type="changes",
             session_id=command.session_id,
@@ -295,9 +305,13 @@ ADAPTER_RUNTIME_RECOVERY = (
 )
 
 
-def _client() -> BridgeClient:
+def _config_directory() -> Path | None:
     directory = os.environ.get("ABLETON_CTRL_CONFIG_DIR")
-    config = load_or_create_config(Path(directory) if directory else None)
+    return Path(directory) if directory else None
+
+
+def _client() -> BridgeClient:
+    config = load_or_create_config(_config_directory())
     return BridgeClient(config)
 
 
@@ -310,6 +324,87 @@ async def _dispatch_query(request: QueryRequest) -> QueryResponse:
     if request.type == "snapshot":
         return await _with_adapter_runtime_metadata(client, response)
     return response
+
+
+async def _dispatch_command(command: CliCommand) -> QueryResponse:
+    if isinstance(command, ChangesCommand) and command.after_revision is None:
+        return await _dispatch_implicit_changes(command)
+    return await _dispatch_query(build_query(command))
+
+
+async def _dispatch_implicit_changes(command: ChangesCommand) -> QueryResponse:
+    client = _client()
+    snapshot_response = await client.request(SnapshotQuery(type="snapshot", depth=0, page_size=1))
+    if not snapshot_response.ok or not isinstance(snapshot_response.result, SnapshotPayload):
+        return snapshot_response
+
+    set_name = _set_name_from_snapshot(snapshot_response.result)
+    if set_name is None:
+        return _missing_set_name_response()
+
+    cursor_path = _changes_cursor_path(set_name)
+    after_revision = _read_cursor(cursor_path)
+    response = await client.request(
+        ChangesQuery(
+            type="changes",
+            session_id=snapshot_response.result.session_id,
+            after_revision=after_revision,
+            limit=command.limit,
+        )
+    )
+    if response.ok and isinstance(response.result, ChangesPayload):
+        _write_cursor(cursor_path, response.result.next_revision)
+    return response
+
+
+def _set_name_from_snapshot(snapshot: SnapshotPayload) -> str | None:
+    root = snapshot.root
+    if not isinstance(root, dict):
+        return None
+    properties = root.get("properties")
+    if not isinstance(properties, dict):
+        return None
+    name = properties.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return None
+    return name
+
+
+def _missing_set_name_response() -> QueryResponse:
+    return QueryResponse(
+        ok=False,
+        completeness="unavailable",
+        error=QueryError(
+            code=ErrorCode.STALE_STATE,
+            message="The current Ableton Live Set name could not be determined.",
+            recovery={"action": "save_or_name_current_live_set"},
+        ),
+    )
+
+
+def _changes_cursor_path(set_name: str) -> Path:
+    config_directory = _config_directory() or DEFAULT_CONFIG_DIRECTORY
+    return config_directory / "cursors" / "changes" / f"{quote(set_name, safe='')}.json"
+
+
+def _read_cursor(path: Path) -> int:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return 0
+    revision = data.get("next_revision") if isinstance(data, dict) else None
+    return revision if isinstance(revision, int) and revision >= 0 else 0
+
+
+def _write_cursor(path: Path, next_revision: int) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary_path = path.with_name(f".{path.name}.tmp")
+    temporary_path.write_text(
+        json.dumps({"next_revision": next_revision}, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    temporary_path.chmod(0o600)
+    os.replace(temporary_path, path)
 
 
 def _resource_response(request: ResourceQuery) -> QueryResponse:
@@ -358,7 +453,7 @@ def run(argv: Sequence[str]) -> int:
         return 2
     assert command is not None
 
-    response = asyncio.run(_dispatch_query(build_query(command)))
+    response = asyncio.run(_dispatch_command(command))
     _print_response(response)
     return 0
 
