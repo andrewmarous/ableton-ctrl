@@ -53,15 +53,26 @@ def test_builds_children_query_from_short_action() -> None:
 
 
 def test_builds_search_query_from_short_action() -> None:
-    query = build_query(SearchCommand(action="search", name="kick", object_type="Track", path=None))
+    query = build_query(
+        SearchCommand.model_validate(
+            {
+                "action": "search",
+                "name": "kick",
+                "object_type": "Track",
+                "path": "Live Set",
+                "start_index": 5,
+                "page_size": 25,
+            }
+        )
+    )
     assert query.model_dump(mode="json") == {
         "protocol_version": 1,
         "type": "search",
         "name": "kick",
         "object_type": "Track",
-        "path": None,
-        "offset": 0,
-        "limit": 20,
+        "path": "Live Set",
+        "offset": 5,
+        "limit": 25,
     }
 
 

@@ -99,6 +99,18 @@ class SearchCommand(CliModel):
     offset: int = Field(default=0, ge=0)
     limit: int = Field(default=20, ge=1, le=200)
 
+    @model_validator(mode="before")
+    @classmethod
+    def accept_mcp_pagination_names(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        if "start_index" in normalized and "offset" not in normalized:
+            normalized["offset"] = normalized.pop("start_index")
+        if "page_size" in normalized and "limit" not in normalized:
+            normalized["limit"] = normalized.pop("page_size")
+        return normalized
+
 
 class SchemaCommand(CliModel):
     action: Literal["schema"]

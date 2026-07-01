@@ -176,6 +176,11 @@ def test_missing_required_action_fields_return_structured_error(
             "limit",
         ),
         ({"action": "search", "name": "x" * 257}, "name"),
+        ({"action": "search", "start_index": -1}, "offset"),
+        ({"action": "search", "page_size": 0}, "limit"),
+        ({"action": "search", "limit": 201}, "limit"),
+        ({"action": "search", "object_type": 12}, "object_type"),
+        ({"action": "search", "path": 12}, "path"),
         ({"action": "changes", "session_id": "s1", "after_revision": -1}, "after_revision"),
         ({"action": "changes", "session_id": "s1", "after_revision": 0, "limit": 501}, "limit"),
     ],
@@ -234,6 +239,23 @@ def test_valid_object_dispatch_uses_existing_bridge_client_error(tmp_path: Path)
     }
 
 
+def test_valid_search_dispatch_uses_existing_bridge_client_error(tmp_path: Path) -> None:
+    result = run_cli('{"action":"search","name":"track"}', config_dir=tmp_path)
+
+    assert result.returncode == 0
+    response = stdout_json(result)
+    assert response == {
+        "protocol_version": 1,
+        "ok": False,
+        "completeness": "unavailable",
+        "error": {
+            "code": "bridge_unavailable",
+            "message": "The local Ableton bridge is unavailable.",
+            "recovery": {"action": "start_or_restart_bridge"},
+        },
+    }
+
+
 async def test_children_cli_paginates_fixture_relationship_and_preserves_metadata(
     tmp_path: Path,
 ) -> None:
@@ -273,6 +295,54 @@ async def test_children_cli_paginates_fixture_relationship_and_preserves_metadat
     assert response["captured_at"] == response["result"]["captured_at"]
     assert response["bridge_revision"] == response["result"]["bridge_revision"]
     assert response["result"]["kind"] == "list_children"
+    assert response["result"]["items"] == [
+        {
+            "object_id": response["result"]["items"][0]["object_id"],
+            "type": "Track",
+            "path": "Live Set/Track 1",
+        }
+    ]
+    assert response["result"]["continuation"] == "1:1"
+
+
+async def test_search_cli_filters_fixture_objects_and_preserves_metadata(
+    tmp_path: Path,
+) -> None:
+    bridge = BridgeServer(host="127.0.0.1", port=0, secret=SECRET, store=GraphStore())
+    await bridge.start()
+    write_config(tmp_path, bridge.port)
+    _reader, adapter = await apply_fixture(bridge, fixture_batch_with_second_track())
+    try:
+        result = await asyncio.to_thread(
+            run_cli,
+            json.dumps(
+                {
+                    "action": "search",
+                    "name": "track",
+                    "object_type": "Track",
+                    "path": "Live Set",
+                    "start_index": 0,
+                    "page_size": 1,
+                }
+            ),
+            config_dir=tmp_path,
+        )
+    finally:
+        adapter.close()
+        await adapter.wait_closed()
+        await bridge.close()
+
+    assert result.returncode == 0
+    response = stdout_json(result)
+    assert response["ok"] is True
+    assert response["live_version"] == "12.4.2"
+    assert response["session_id"] == "s1"
+    assert response["bridge_revision"] == 1
+    assert response["completeness"] == "partial"
+    assert response["cache_age_seconds"] >= 0
+    assert response["captured_at"] == response["result"]["captured_at"]
+    assert response["bridge_revision"] == response["result"]["bridge_revision"]
+    assert response["result"]["kind"] == "search"
     assert response["result"]["items"] == [
         {
             "object_id": response["result"]["items"][0]["object_id"],
