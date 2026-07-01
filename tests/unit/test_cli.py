@@ -73,7 +73,9 @@ def test_builds_schema_query_from_short_action() -> None:
 
 
 def test_builds_explicit_changes_query_from_short_action() -> None:
-    query = build_query(ChangesCommand(action="changes", session_id="s1", after_revision=2, limit=10))
+    query = build_query(
+        ChangesCommand(action="changes", session_id="s1", after_revision=2, limit=10)
+    )
     assert query.model_dump(mode="json") == {
         "protocol_version": 1,
         "type": "changes",

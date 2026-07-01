@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import subprocess
@@ -6,6 +7,12 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+
+from ableton_ctrl.bridge.server import BridgeServer
+from ableton_ctrl.bridge.store import GraphStore
+
+SECRET = "fixture-secret-that-is-at-least-forty-three-characters"
+FIXTURE = Path("tests/fixtures/adapter/live-12.4.2-intro-basic.jsonl")
 
 
 def run_cli(*args: str, config_dir: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -30,10 +37,30 @@ def stdout_json(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
 @pytest.mark.parametrize(
     ("args", "code", "message", "recovery"),
     [
-        ((), "invalid_invocation", "ableton-ctrl expects exactly one JSON argument.", "call_with_one_json_argument"),
-        (("{}", "{}"), "invalid_invocation", "ableton-ctrl expects exactly one JSON argument.", "call_with_one_json_argument"),
-        (("not-json",), "invalid_json", "ableton-ctrl argument must be a JSON object.", "pass_valid_json_object"),
-        (("[]",), "invalid_json", "ableton-ctrl argument must be a JSON object.", "pass_valid_json_object"),
+        (
+            (),
+            "invalid_invocation",
+            "ableton-ctrl expects exactly one JSON argument.",
+            "call_with_one_json_argument",
+        ),
+        (
+            ("{}", "{}"),
+            "invalid_invocation",
+            "ableton-ctrl expects exactly one JSON argument.",
+            "call_with_one_json_argument",
+        ),
+        (
+            ("not-json",),
+            "invalid_json",
+            "ableton-ctrl argument must be a JSON object.",
+            "pass_valid_json_object",
+        ),
+        (
+            ("[]",),
+            "invalid_json",
+            "ableton-ctrl argument must be a JSON object.",
+            "pass_valid_json_object",
+        ),
     ],
 )
 def test_invalid_invocation_returns_structured_json_error(
@@ -102,14 +129,28 @@ def test_missing_required_action_fields_return_structured_error(
     [
         ({"action": "snapshot", "depth": 9}, "depth"),
         ({"action": "snapshot", "page_size": 0}, "page_size"),
-        ({"action": "children", "object_id": "obj", "relationship": "tracks", "revision": 0}, "revision"),
-        ({"action": "children", "object_id": "obj", "relationship": "tracks", "revision": 1, "limit": 201}, "limit"),
+        (
+            {"action": "children", "object_id": "obj", "relationship": "tracks", "revision": 0},
+            "revision",
+        ),
+        (
+            {
+                "action": "children",
+                "object_id": "obj",
+                "relationship": "tracks",
+                "revision": 1,
+                "limit": 201,
+            },
+            "limit",
+        ),
         ({"action": "search", "name": "x" * 257}, "name"),
         ({"action": "changes", "session_id": "s1", "after_revision": -1}, "after_revision"),
         ({"action": "changes", "session_id": "s1", "after_revision": 0, "limit": 501}, "limit"),
     ],
 )
-def test_invalid_action_bounds_return_structured_error(payload: dict[str, Any], field_name: str) -> None:
+def test_invalid_action_bounds_return_structured_error(
+    payload: dict[str, Any], field_name: str
+) -> None:
     result = run_cli(json.dumps(payload))
 
     assert result.returncode == 2
@@ -142,3 +183,109 @@ def test_valid_snapshot_dispatch_uses_existing_bridge_client_error(tmp_path: Pat
             "recovery": {"action": "start_or_restart_bridge"},
         },
     }
+
+
+async def test_snapshot_cli_queries_fixture_and_preserves_metadata(tmp_path: Path) -> None:
+    bridge = BridgeServer(host="127.0.0.1", port=0, secret=SECRET, store=GraphStore())
+    await bridge.start()
+    write_config(tmp_path, bridge.port)
+    _reader, adapter = await apply_fixture(bridge)
+    try:
+        result = await asyncio.to_thread(
+            run_cli,
+            '{"action":"snapshot","depth":1,"page_size":1}',
+            config_dir=tmp_path,
+        )
+    finally:
+        adapter.close()
+        await adapter.wait_closed()
+        await bridge.close()
+
+    assert result.returncode == 0
+    response = stdout_json(result)
+    assert response["ok"] is True
+    assert response["live_version"] == "12.4.2"
+    assert response["session_id"] == "s1"
+    assert response["bridge_revision"] == 1
+    assert response["completeness"] in {"complete", "partial"}
+    assert response["cache_age_seconds"] >= 0
+    assert response["captured_at"] == response["result"]["captured_at"]
+    assert response["bridge_revision"] == response["result"]["bridge_revision"]
+    assert len(response["result"]["root"]["relationships"]["tracks"]["items"]) <= 1
+
+
+async def test_snapshot_cli_preserves_adapter_runtime_metadata(tmp_path: Path) -> None:
+    bridge = BridgeServer(host="127.0.0.1", port=0, secret=SECRET, store=GraphStore())
+    await bridge.start()
+    write_config(tmp_path, bridge.port)
+    reader, adapter = await apply_fixture(bridge)
+    terminal = fixture_batch()
+    terminal.update(
+        {
+            "observations": [],
+            "removed_source_ids": [],
+            "discovery_complete": False,
+            "runtime_outcome": "partial_result",
+            "runtime_action": "reduce_observation_size_or_capacity",
+        }
+    )
+    await send_update(reader, adapter, terminal, expected_revision=2)
+    try:
+        result = await asyncio.to_thread(run_cli, '{"action":"snapshot"}', config_dir=tmp_path)
+    finally:
+        adapter.close()
+        await adapter.wait_closed()
+        await bridge.close()
+
+    assert result.returncode == 0
+    response = stdout_json(result)
+    assert response["ok"] is True
+    assert response["result"]["adapter_runtime"] == {
+        "outcome": "partial_result",
+        "action": "reduce_observation_size_or_capacity",
+        "recovery": (
+            "Reduce the observed graph or adapter capacity pressure, then reload "
+            "or restart the ableton-ctrl Ableton Remote Script."
+        ),
+    }
+
+
+async def apply_fixture(
+    bridge: BridgeServer,
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    reader, writer = await asyncio.open_connection("127.0.0.1", bridge.port)
+    hello = {
+        "protocol_version": 1,
+        "role": "adapter",
+        "secret": SECRET,
+        "message": {"kind": "hello", "session_id": "s1", "live_version": "12.4.2"},
+    }
+    writer.write(json.dumps(hello).encode() + b"\n")
+    await writer.drain()
+    assert json.loads(await reader.readline())["ok"] is True
+    await send_update(reader, writer, fixture_batch(), expected_revision=1)
+    return reader, writer
+
+
+def fixture_batch() -> dict[str, Any]:
+    batch: dict[str, Any] = json.loads(FIXTURE.read_text())
+    batch["session_id"] = "s1"
+    return batch
+
+
+async def send_update(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    batch: dict[str, Any],
+    *,
+    expected_revision: int,
+) -> None:
+    writer.write(json.dumps({"kind": "update", "batch": batch}).encode() + b"\n")
+    await writer.drain()
+    assert json.loads(await reader.readline())["bridge_revision"] == expected_revision
+
+
+def write_config(directory: Path, port: int) -> None:
+    (directory / "config.json").write_text(
+        json.dumps({"host": "127.0.0.1", "port": port, "secret": SECRET})
+    )

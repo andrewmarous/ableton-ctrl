@@ -218,11 +218,20 @@ class StatusPayload(BaseModel):
     runtime_action: Literal["reduce_observation_size_or_capacity"] | None = None
 
 
+class AdapterRuntimeMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["partial_result"] | None = None
+    action: Literal["reduce_observation_size_or_capacity"] | None = None
+    recovery: str = Field(min_length=1)
+
+
 class SnapshotPayload(QueryMetadata):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["snapshot"] = "snapshot"
     root: JsonValue
+    adapter_runtime: AdapterRuntimeMetadata | None = None
 
 
 class ObjectPayload(QueryMetadata):

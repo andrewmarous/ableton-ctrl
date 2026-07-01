@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ableton_ctrl.config import load_or_create_config
 from ableton_ctrl.contracts import (
+    AdapterRuntimeMetadata,
     ChangesQuery,
     ErrorCode,
     GetObjectQuery,
@@ -21,9 +22,12 @@ from ableton_ctrl.contracts import (
     QueryError,
     QueryRequest,
     QueryResponse,
+    SnapshotPayload,
     SchemaQuery,
     SearchQuery,
     SnapshotQuery,
+    StatusPayload,
+    StatusQuery,
 )
 from ableton_ctrl.mcp.client import BridgeClient
 
@@ -82,7 +86,14 @@ class ChangesCommand(CliModel):
     limit: int = Field(default=100, ge=1, le=500)
 
 
-CliCommand = SnapshotCommand | ObjectCommand | ChildrenCommand | SearchCommand | SchemaCommand | ChangesCommand
+CliCommand = (
+    SnapshotCommand
+    | ObjectCommand
+    | ChildrenCommand
+    | SearchCommand
+    | SchemaCommand
+    | ChangesCommand
+)
 ACTION_MODELS: dict[str, type[CliCommand]] = {
     "snapshot": SnapshotCommand,
     "object": ObjectCommand,
@@ -204,10 +215,47 @@ def build_query(command: CliCommand) -> QueryRequest:
     raise AssertionError(f"Unhandled CLI command: {command!r}")
 
 
-async def _dispatch_query(request: QueryRequest) -> QueryResponse:
+ADAPTER_RUNTIME_RECOVERY = (
+    "Reduce the observed graph or adapter capacity pressure, then reload "
+    "or restart the ableton-ctrl Ableton Remote Script."
+)
+
+
+def _client() -> BridgeClient:
     directory = os.environ.get("ABLETON_CTRL_CONFIG_DIR")
     config = load_or_create_config(Path(directory) if directory else None)
-    return await BridgeClient(config).request(request)
+    return BridgeClient(config)
+
+
+async def _dispatch_query(request: QueryRequest) -> QueryResponse:
+    client = _client()
+    response = await client.request(request)
+    if request.type == "snapshot":
+        return await _with_adapter_runtime_metadata(client, response)
+    return response
+
+
+async def _with_adapter_runtime_metadata(
+    client: BridgeClient, response: QueryResponse
+) -> QueryResponse:
+    if not response.ok or not isinstance(response.result, SnapshotPayload):
+        return response
+
+    status_response = await client.request(StatusQuery(type="status"))
+    if not status_response.ok or not isinstance(status_response.result, StatusPayload):
+        return response
+
+    outcome = status_response.result.runtime_outcome
+    action = status_response.result.runtime_action
+    if outcome is None and action is None:
+        return response
+
+    response.result.adapter_runtime = AdapterRuntimeMetadata(
+        outcome=outcome,
+        action=action,
+        recovery=ADAPTER_RUNTIME_RECOVERY,
+    )
+    return response
 
 
 def run(argv: Sequence[str]) -> int:
