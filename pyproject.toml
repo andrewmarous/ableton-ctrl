@@ -22,6 +22,7 @@ dev = [
 [project.scripts]
 ableton-ctrl = "ableton_ctrl.cli:main"
 ableton-ctrl-bridge = "ableton_ctrl.bridge.server:main"
+ableton-ctrl-install-pi = "ableton_ctrl.pi_installer:main"
 ableton-ctrl-mcp = "ableton_ctrl.mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
