@@ -95,7 +95,15 @@ def test_unknown_action_returns_structured_error() -> None:
         "message": "Unknown ableton-ctrl action: launch_clip.",
         "recovery": {
             "action": "use_supported_action",
-            "supported_actions": ["snapshot", "object", "children", "search", "schema", "changes"],
+            "supported_actions": [
+                "snapshot",
+                "object",
+                "children",
+                "search",
+                "schema",
+                "changes",
+                "resource",
+            ],
         },
     }
 
@@ -108,6 +116,7 @@ def test_unknown_action_returns_structured_error() -> None:
         ({"action": "children", "object_id": "obj", "revision": 1}, "relationship"),
         ({"action": "children", "object_id": "obj", "relationship": "tracks"}, "revision"),
         ({"action": "changes", "session_id": "s1"}, "after_revision"),
+        ({"action": "resource"}, "name"),
     ],
 )
 def test_missing_required_action_fields_return_structured_error(
@@ -252,6 +261,97 @@ def test_valid_search_dispatch_uses_existing_bridge_client_error(tmp_path: Path)
             "code": "bridge_unavailable",
             "message": "The local Ableton bridge is unavailable.",
             "recovery": {"action": "start_or_restart_bridge"},
+        },
+    }
+
+
+def test_resource_cli_returns_all_expected_learning_metadata_without_bridge(
+    tmp_path: Path,
+) -> None:
+    responses = {
+        name: stdout_json(
+            run_cli(json.dumps({"action": "resource", "name": name}), config_dir=tmp_path)
+        )
+        for name in ("glossary", "interpretation", "limitations")
+    }
+
+    for name, response in responses.items():
+        assert response["ok"] is True
+        assert response["completeness"] == "complete"
+        assert response["result"]["kind"] == "resource"
+        assert response["result"]["name"] == name
+        assert response["result"]["resource"]["source_kind"] == "learning_metadata"
+
+    glossary = responses["glossary"]["result"]["resource"]
+    assert {entry["term"] for entry in glossary["entries"]} == {
+        "Live Set",
+        "Session View",
+        "Arrangement View",
+        "scene",
+        "track",
+        "return track",
+        "master track",
+        "clip slot",
+        "audio clip",
+        "MIDI clip",
+        "device",
+        "device parameter",
+        "mixer",
+        "routing",
+        "automation",
+        "selection",
+        "beat time",
+        "decibel",
+        "normalized parameter",
+        "revision",
+        "capture time",
+        "completeness",
+    }
+
+    interpretation = responses["interpretation"]["result"]["resource"]
+    assert {entry["term"] for entry in interpretation["entries"]} == {
+        "revision",
+        "capture time",
+        "completeness",
+        "read outcome",
+        "object type",
+        "property",
+        "relationship",
+    }
+
+    limitations = responses["limitations"]["result"]["resource"]
+    assert limitations["target"] == {
+        "product": "Ableton Live Intro",
+        "version": "12.4.2",
+    }
+    limitation_text = " ".join(limitations["limitations"]).casefold()
+    for phrase in (
+        "undocumented",
+        "max for live",
+        "runtime discovery",
+        "raw audio",
+        "raw midi",
+        "coverage report",
+    ):
+        assert phrase in limitation_text
+
+
+def test_resource_cli_returns_structured_error_for_unknown_resource(tmp_path: Path) -> None:
+    result = run_cli('{"action":"resource","name":"not-a-resource"}', config_dir=tmp_path)
+
+    assert result.returncode == 2
+    response = stdout_json(result)
+    assert response == {
+        "protocol_version": 1,
+        "ok": False,
+        "completeness": "unavailable",
+        "error": {
+            "code": "validation_failed",
+            "message": "Unknown ableton-ctrl resource: not-a-resource.",
+            "recovery": {
+                "action": "choose_supported_resource",
+                "supported_resources": ["glossary", "interpretation", "limitations"],
+            },
         },
     }
 

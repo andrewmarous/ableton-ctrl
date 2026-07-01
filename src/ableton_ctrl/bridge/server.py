@@ -464,12 +464,14 @@ class BridgeServer:
             )
         elif request.type == "schema":
             payload = SchemaPayload(types=raw["types"], **metadata)
-        else:
+        elif request.type == "changes":
             payload = ChangesPayload(
                 changes=raw["changes"],
                 next_revision=raw["next_revision"],
                 **metadata,
             )
+        else:
+            raise ValueError("resource queries are handled by the CLI before bridge dispatch")
         return QueryResponse(ok=True, result=payload, **metadata)
 
     def _execute_query(self, request: QueryRequest) -> Any:
@@ -497,11 +499,13 @@ class BridgeServer:
             )
         if request.type == "schema":
             return self.store.get_schema(request.object_type)
-        return self.store.get_changes(
-            request.session_id,
-            request.after_revision,
-            request.limit,
-        )
+        if request.type == "changes":
+            return self.store.get_changes(
+                request.session_id,
+                request.after_revision,
+                request.limit,
+            )
+        raise ValueError("resource queries are handled by the CLI before bridge dispatch")
 
     async def _send_store_error(
         self,

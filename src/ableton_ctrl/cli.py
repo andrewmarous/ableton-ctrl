@@ -22,6 +22,8 @@ from ableton_ctrl.contracts import (
     QueryError,
     QueryRequest,
     QueryResponse,
+    ResourcePayload,
+    ResourceQuery,
     SnapshotPayload,
     SchemaQuery,
     SearchQuery,
@@ -33,12 +35,23 @@ from ableton_ctrl.mcp.client import BridgeClient
 
 CLI_USAGE_RECOVERY: dict[str, JsonValue] = {"action": "call_with_one_json_argument"}
 INVALID_JSON_RECOVERY: dict[str, JsonValue] = {"action": "pass_valid_json_object"}
-SUPPORTED_ACTIONS = ["snapshot", "object", "children", "search", "schema", "changes"]
+SUPPORTED_ACTIONS = ["snapshot", "object", "children", "search", "schema", "changes", "resource"]
 UNKNOWN_ACTION_RECOVERY: dict[str, JsonValue] = cast(
     dict[str, JsonValue],
     {"action": "use_supported_action", "supported_actions": SUPPORTED_ACTIONS},
 )
 VALIDATION_RECOVERY: dict[str, JsonValue] = {"action": "fix_action_fields"}
+RESOURCE_FILES = {
+    "glossary": "glossary.json",
+    "interpretation": "interpretation.json",
+    "limitations": "live-12.4.2-intro-limitations.json",
+}
+SUPPORTED_RESOURCES = list(RESOURCE_FILES)
+RESOURCE_RECOVERY: dict[str, JsonValue] = cast(
+    dict[str, JsonValue],
+    {"action": "choose_supported_resource", "supported_resources": SUPPORTED_RESOURCES},
+)
+RESOURCE_DIRECTORY = Path(__file__).parent / "resources"
 
 
 class CliModel(BaseModel):
@@ -124,6 +137,18 @@ class ChangesCommand(CliModel):
     limit: int = Field(default=100, ge=1, le=500)
 
 
+class ResourceCommand(CliModel):
+    action: Literal["resource"]
+    name: str = Field(min_length=1)
+
+    @field_validator("name")
+    @classmethod
+    def reject_blank_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("name must be non-empty")
+        return value
+
+
 CliCommand = (
     SnapshotCommand
     | ObjectCommand
@@ -131,6 +156,7 @@ CliCommand = (
     | SearchCommand
     | SchemaCommand
     | ChangesCommand
+    | ResourceCommand
 )
 ACTION_MODELS: dict[str, type[CliCommand]] = {
     "snapshot": SnapshotCommand,
@@ -139,6 +165,7 @@ ACTION_MODELS: dict[str, type[CliCommand]] = {
     "search": SearchCommand,
     "schema": SchemaCommand,
     "changes": ChangesCommand,
+    "resource": ResourceCommand,
 }
 
 
@@ -209,13 +236,20 @@ def _validate_command(raw: dict[str, Any]) -> tuple[CliCommand | None, QueryResp
             UNKNOWN_ACTION_RECOVERY,
         )
     try:
-        return ACTION_MODELS[action].model_validate(raw), None
+        command = ACTION_MODELS[action].model_validate(raw)
     except ValidationError as exc:
         return None, _error_response(
             ErrorCode.VALIDATION_FAILED,
             f"Invalid fields for action '{action}'.",
             {"action": "fix_action_fields", "details": _validation_details(exc)},
         )
+    if isinstance(command, ResourceCommand) and command.name not in RESOURCE_FILES:
+        return None, _error_response(
+            ErrorCode.VALIDATION_FAILED,
+            f"Unknown ableton-ctrl resource: {command.name}.",
+            RESOURCE_RECOVERY,
+        )
+    return command, None
 
 
 def build_query(command: CliCommand) -> QueryRequest:
@@ -250,6 +284,8 @@ def build_query(command: CliCommand) -> QueryRequest:
             after_revision=command.after_revision,
             limit=command.limit,
         )
+    if isinstance(command, ResourceCommand):
+        return ResourceQuery(type="resource", name=command.name)
     raise AssertionError(f"Unhandled CLI command: {command!r}")
 
 
@@ -266,11 +302,24 @@ def _client() -> BridgeClient:
 
 
 async def _dispatch_query(request: QueryRequest) -> QueryResponse:
+    if isinstance(request, ResourceQuery):
+        return _resource_response(request)
+
     client = _client()
     response = await client.request(request)
     if request.type == "snapshot":
         return await _with_adapter_runtime_metadata(client, response)
     return response
+
+
+def _resource_response(request: ResourceQuery) -> QueryResponse:
+    filename = RESOURCE_FILES[request.name]
+    resource = json.loads((RESOURCE_DIRECTORY / filename).read_text(encoding="utf-8"))
+    return QueryResponse(
+        ok=True,
+        completeness="complete",
+        result=ResourcePayload(name=request.name, resource=resource),
+    )
 
 
 async def _with_adapter_runtime_metadata(

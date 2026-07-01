@@ -2,6 +2,7 @@ from ableton_ctrl.cli import (
     ChangesCommand,
     ChildrenCommand,
     ObjectCommand,
+    ResourceCommand,
     SchemaCommand,
     SearchCommand,
     SnapshotCommand,
@@ -95,4 +96,13 @@ def test_builds_explicit_changes_query_from_short_action() -> None:
         "session_id": "s1",
         "after_revision": 2,
         "limit": 10,
+    }
+
+
+def test_builds_resource_query_from_short_action() -> None:
+    query = build_query(ResourceCommand(action="resource", name="glossary"))
+    assert query.model_dump(mode="json") == {
+        "protocol_version": 1,
+        "type": "resource",
+        "name": "glossary",
     }

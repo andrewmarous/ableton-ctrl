@@ -170,6 +170,13 @@ class ChangesQuery(QueryModel):
     limit: int = Field(default=100, ge=1, le=500)
 
 
+class ResourceQuery(QueryModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["resource"]
+    name: str = Field(min_length=1)
+
+
 QueryRequest: TypeAlias = Annotated[
     StatusQuery
     | SnapshotQuery
@@ -177,7 +184,8 @@ QueryRequest: TypeAlias = Annotated[
     | ListChildrenQuery
     | SearchQuery
     | SchemaQuery
-    | ChangesQuery,
+    | ChangesQuery
+    | ResourceQuery,
     Field(discriminator="type"),
 ]
 
@@ -272,6 +280,14 @@ class ChangesPayload(QueryMetadata):
     next_revision: int = Field(ge=0)
 
 
+class ResourcePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["resource"] = "resource"
+    name: str = Field(min_length=1)
+    resource: JsonValue
+
+
 QueryPayload: TypeAlias = Annotated[
     StatusPayload
     | SnapshotPayload
@@ -279,7 +295,8 @@ QueryPayload: TypeAlias = Annotated[
     | ChildrenPayload
     | SearchPayload
     | SchemaPayload
-    | ChangesPayload,
+    | ChangesPayload
+    | ResourcePayload,
     Field(discriminator="kind"),
 ]
 
@@ -306,7 +323,7 @@ class QueryResponse(BaseModel):
             raise ValueError("error responses require error and forbid result")
         if not self.ok and self.completeness != "unavailable":
             raise ValueError("error responses require unavailable completeness")
-        if self.ok and self.result is not None:
+        if self.ok and self.result is not None and isinstance(self.result, QueryMetadata):
             metadata_fields = (
                 "live_version",
                 "session_id",
