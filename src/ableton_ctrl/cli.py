@@ -7,7 +7,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Sequence, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -27,11 +27,14 @@ from ableton_ctrl.contracts import (
 )
 from ableton_ctrl.mcp.client import BridgeClient
 
-CLI_USAGE_RECOVERY = {"action": "call_with_one_json_argument"}
-INVALID_JSON_RECOVERY = {"action": "pass_valid_json_object"}
+CLI_USAGE_RECOVERY: dict[str, JsonValue] = {"action": "call_with_one_json_argument"}
+INVALID_JSON_RECOVERY: dict[str, JsonValue] = {"action": "pass_valid_json_object"}
 SUPPORTED_ACTIONS = ["snapshot", "object", "children", "search", "schema", "changes"]
-UNKNOWN_ACTION_RECOVERY = {"action": "use_supported_action", "supported_actions": SUPPORTED_ACTIONS}
-VALIDATION_RECOVERY = {"action": "fix_action_fields"}
+UNKNOWN_ACTION_RECOVERY: dict[str, JsonValue] = cast(
+    dict[str, JsonValue],
+    {"action": "use_supported_action", "supported_actions": SUPPORTED_ACTIONS},
+)
+VALIDATION_RECOVERY: dict[str, JsonValue] = {"action": "fix_action_fields"}
 
 
 class CliModel(BaseModel):
@@ -126,8 +129,8 @@ def _parse_json_argument(argv: Sequence[str]) -> tuple[dict[str, Any] | None, Qu
     return raw, None
 
 
-def _validation_details(exc: ValidationError) -> list[dict[str, str]]:
-    details: list[dict[str, str]] = []
+def _validation_details(exc: ValidationError) -> list[JsonValue]:
+    details: list[JsonValue] = []
     for item in exc.errors(include_url=False, include_context=False, include_input=False):
         loc = item.get("loc", ())
         field = str(loc[-1]) if loc else "action"
@@ -142,7 +145,13 @@ def _validate_command(raw: dict[str, Any]) -> tuple[CliCommand | None, QueryResp
         return None, _error_response(
             ErrorCode.VALIDATION_FAILED,
             "Invalid fields for action envelope.",
-            {"action": "fix_action_fields", "details": [{"field": "action", "reason": "Field required"}]},
+            cast(
+                dict[str, JsonValue],
+                {
+                    "action": "fix_action_fields",
+                    "details": [{"field": "action", "reason": "Field required"}],
+                },
+            ),
         )
     if action not in SUPPORTED_ACTIONS:
         return None, _error_response(

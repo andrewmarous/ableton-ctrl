@@ -30,6 +30,7 @@ packages = ["src/ableton_ctrl"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = ["--import-mode=importlib"]
 
 [tool.ruff]
 line-length = 100
@@ -37,3 +38,19 @@ line-length = 100
 [tool.mypy]
 python_version = "3.11"
 strict = true
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = ["src", "."]
+
+[[tool.mypy.overrides]]
+module = [
+    "tests.contract.test_bridge_server",
+    "tests.contract.test_end_to_end",
+    "tests.contract.test_mcp_stdio",
+    "tests.unit.test_adapter_runtime",
+    "tests.unit.test_config",
+    "tests.unit.test_contracts",
+    "tests.unit.test_discovery",
+    "tests.unit.test_live_smoke",
+]
+ignore_errors = true

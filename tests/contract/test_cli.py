@@ -3,7 +3,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -24,7 +24,7 @@ def run_cli(*args: str, config_dir: Path | None = None) -> subprocess.CompletedP
 
 def stdout_json(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
     assert result.stderr == ""
-    return json.loads(result.stdout)
+    return cast(dict[str, Any], json.loads(result.stdout))
 
 
 @pytest.mark.parametrize(
