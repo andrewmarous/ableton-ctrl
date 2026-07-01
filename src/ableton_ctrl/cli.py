@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any, Literal, Sequence, cast
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from ableton_ctrl.config import load_or_create_config
 from ableton_ctrl.contracts import (
@@ -70,6 +70,25 @@ class ChildrenCommand(CliModel):
     revision: int = Field(ge=1)
     offset: int = Field(default=0, ge=0)
     limit: int = Field(default=20, ge=1, le=200)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_mcp_pagination_names(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        if "start_index" in normalized and "offset" not in normalized:
+            normalized["offset"] = normalized.pop("start_index")
+        if "page_size" in normalized and "limit" not in normalized:
+            normalized["limit"] = normalized.pop("page_size")
+        return normalized
+
+    @field_validator("object_id", "relationship")
+    @classmethod
+    def reject_blank_identifiers(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must be non-empty")
+        return value
 
 
 class SearchCommand(CliModel):

@@ -30,13 +30,15 @@ def test_builds_object_query_from_short_action() -> None:
 
 def test_builds_children_query_from_short_action() -> None:
     query = build_query(
-        ChildrenCommand(
-            action="children",
-            object_id="obj-1",
-            relationship="tracks",
-            revision=3,
-            offset=10,
-            limit=25,
+        ChildrenCommand.model_validate(
+            {
+                "action": "children",
+                "object_id": "obj-1",
+                "relationship": "tracks",
+                "revision": 3,
+                "start_index": 10,
+                "page_size": 25,
+            }
         )
     )
     assert query.model_dump(mode="json") == {

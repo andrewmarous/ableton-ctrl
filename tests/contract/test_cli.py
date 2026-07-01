@@ -104,6 +104,8 @@ def test_unknown_action_returns_structured_error() -> None:
     ("payload", "field_name"),
     [
         ({"action": "object"}, "object_id"),
+        ({"action": "children", "relationship": "tracks", "revision": 1}, "object_id"),
+        ({"action": "children", "object_id": "obj", "revision": 1}, "relationship"),
         ({"action": "children", "object_id": "obj", "relationship": "tracks"}, "revision"),
         ({"action": "changes", "session_id": "s1"}, "after_revision"),
     ],
@@ -134,6 +136,34 @@ def test_missing_required_action_fields_return_structured_error(
         (
             {"action": "children", "object_id": "obj", "relationship": "tracks", "revision": 0},
             "revision",
+        ),
+        (
+            {"action": "children", "object_id": "   ", "relationship": "tracks", "revision": 1},
+            "object_id",
+        ),
+        (
+            {"action": "children", "object_id": "obj", "relationship": "   ", "revision": 1},
+            "relationship",
+        ),
+        (
+            {
+                "action": "children",
+                "object_id": "obj",
+                "relationship": "tracks",
+                "revision": 1,
+                "start_index": -1,
+            },
+            "offset",
+        ),
+        (
+            {
+                "action": "children",
+                "object_id": "obj",
+                "relationship": "tracks",
+                "revision": 1,
+                "page_size": 0,
+            },
+            "limit",
         ),
         (
             {
@@ -202,6 +232,86 @@ def test_valid_object_dispatch_uses_existing_bridge_client_error(tmp_path: Path)
             "recovery": {"action": "start_or_restart_bridge"},
         },
     }
+
+
+async def test_children_cli_paginates_fixture_relationship_and_preserves_metadata(
+    tmp_path: Path,
+) -> None:
+    bridge = BridgeServer(host="127.0.0.1", port=0, secret=SECRET, store=GraphStore())
+    await bridge.start()
+    write_config(tmp_path, bridge.port)
+    _reader, adapter = await apply_fixture(bridge, fixture_batch_with_second_track())
+    root_id = bridge.store.snapshot(depth=0, page_size=20).root.object_id
+    try:
+        result = await asyncio.to_thread(
+            run_cli,
+            json.dumps(
+                {
+                    "action": "children",
+                    "object_id": root_id,
+                    "relationship": "tracks",
+                    "revision": 1,
+                    "start_index": 0,
+                    "page_size": 1,
+                }
+            ),
+            config_dir=tmp_path,
+        )
+    finally:
+        adapter.close()
+        await adapter.wait_closed()
+        await bridge.close()
+
+    assert result.returncode == 0
+    response = stdout_json(result)
+    assert response["ok"] is True
+    assert response["live_version"] == "12.4.2"
+    assert response["session_id"] == "s1"
+    assert response["bridge_revision"] == 1
+    assert response["completeness"] == "partial"
+    assert response["cache_age_seconds"] >= 0
+    assert response["captured_at"] == response["result"]["captured_at"]
+    assert response["bridge_revision"] == response["result"]["bridge_revision"]
+    assert response["result"]["kind"] == "list_children"
+    assert response["result"]["items"] == [
+        {
+            "object_id": response["result"]["items"][0]["object_id"],
+            "type": "Track",
+            "path": "Live Set/Track 1",
+        }
+    ]
+    assert response["result"]["continuation"] == "1:1"
+
+
+async def test_children_cli_invalid_revision_preserves_bridge_error(tmp_path: Path) -> None:
+    bridge = BridgeServer(host="127.0.0.1", port=0, secret=SECRET, store=GraphStore())
+    await bridge.start()
+    write_config(tmp_path, bridge.port)
+    _reader, adapter = await apply_fixture(bridge)
+    root_id = bridge.store.snapshot(depth=0, page_size=20).root.object_id
+    try:
+        result = await asyncio.to_thread(
+            run_cli,
+            json.dumps(
+                {
+                    "action": "children",
+                    "object_id": root_id,
+                    "relationship": "tracks",
+                    "revision": 999,
+                }
+            ),
+            config_dir=tmp_path,
+        )
+    finally:
+        adapter.close()
+        await adapter.wait_closed()
+        await bridge.close()
+
+    assert result.returncode == 0
+    response = stdout_json(result)
+    assert response["ok"] is False
+    assert response["completeness"] == "unavailable"
+    assert response["error"]["code"] == "stale_cursor"
 
 
 async def test_object_cli_fetches_fixture_object_with_existing_query_metadata(
@@ -308,6 +418,7 @@ async def test_snapshot_cli_preserves_adapter_runtime_metadata(tmp_path: Path) -
 
 async def apply_fixture(
     bridge: BridgeServer,
+    batch: dict[str, Any] | None = None,
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     reader, writer = await asyncio.open_connection("127.0.0.1", bridge.port)
     hello = {
@@ -319,13 +430,30 @@ async def apply_fixture(
     writer.write(json.dumps(hello).encode() + b"\n")
     await writer.drain()
     assert json.loads(await reader.readline())["ok"] is True
-    await send_update(reader, writer, fixture_batch(), expected_revision=1)
+    await send_update(
+        reader, writer, fixture_batch() if batch is None else batch, expected_revision=1
+    )
     return reader, writer
 
 
 def fixture_batch() -> dict[str, Any]:
     batch: dict[str, Any] = json.loads(FIXTURE.read_text())
     batch["session_id"] = "s1"
+    return batch
+
+
+def fixture_batch_with_second_track() -> dict[str, Any]:
+    batch = fixture_batch()
+    batch["observations"][0]["relationships"]["tracks"].append("track:2")
+    second_track = dict(batch["observations"][1])
+    second_track.update(
+        {
+            "source_id": "track:2",
+            "path": "Live Set/Track 2",
+            "properties": {"name": "Track 2"},
+        }
+    )
+    batch["observations"].append(second_track)
     return batch
 
 
