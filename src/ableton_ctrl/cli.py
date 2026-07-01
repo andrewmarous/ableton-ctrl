@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any, Literal, Sequence, cast
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from ableton_ctrl.config import load_or_create_config
 from ableton_ctrl.contracts import (
@@ -54,6 +54,13 @@ class SnapshotCommand(CliModel):
 class ObjectCommand(CliModel):
     action: Literal["object"]
     object_id: str = Field(min_length=1)
+
+    @field_validator("object_id")
+    @classmethod
+    def reject_blank_object_id(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("object_id must be non-empty")
+        return value
 
 
 class ChildrenCommand(CliModel):

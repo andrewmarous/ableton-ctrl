@@ -129,6 +129,8 @@ def test_missing_required_action_fields_return_structured_error(
     [
         ({"action": "snapshot", "depth": 9}, "depth"),
         ({"action": "snapshot", "page_size": 0}, "page_size"),
+        ({"action": "object", "object_id": ""}, "object_id"),
+        ({"action": "object", "object_id": "   "}, "object_id"),
         (
             {"action": "children", "object_id": "obj", "relationship": "tracks", "revision": 0},
             "revision",
@@ -183,6 +185,60 @@ def test_valid_snapshot_dispatch_uses_existing_bridge_client_error(tmp_path: Pat
             "recovery": {"action": "start_or_restart_bridge"},
         },
     }
+
+
+def test_valid_object_dispatch_uses_existing_bridge_client_error(tmp_path: Path) -> None:
+    result = run_cli('{"action":"object","object_id":"obj-1"}', config_dir=tmp_path)
+
+    assert result.returncode == 0
+    response = stdout_json(result)
+    assert response == {
+        "protocol_version": 1,
+        "ok": False,
+        "completeness": "unavailable",
+        "error": {
+            "code": "bridge_unavailable",
+            "message": "The local Ableton bridge is unavailable.",
+            "recovery": {"action": "start_or_restart_bridge"},
+        },
+    }
+
+
+async def test_object_cli_fetches_fixture_object_with_existing_query_metadata(
+    tmp_path: Path,
+) -> None:
+    bridge = BridgeServer(host="127.0.0.1", port=0, secret=SECRET, store=GraphStore())
+    await bridge.start()
+    write_config(tmp_path, bridge.port)
+    _reader, adapter = await apply_fixture(bridge)
+    root_id = bridge.store.snapshot(depth=0, page_size=20).root.object_id
+    try:
+        result = await asyncio.to_thread(
+            run_cli,
+            json.dumps({"action": "object", "object_id": root_id}),
+            config_dir=tmp_path,
+        )
+    finally:
+        adapter.close()
+        await adapter.wait_closed()
+        await bridge.close()
+
+    assert result.returncode == 0
+    response = stdout_json(result)
+    assert response["ok"] is True
+    assert response["live_version"] == "12.4.2"
+    assert response["session_id"] == "s1"
+    assert response["bridge_revision"] == 1
+    assert response["completeness"] in {"complete", "partial"}
+    assert response["cache_age_seconds"] >= 0
+    assert response["captured_at"] == response["result"]["captured_at"]
+    assert response["bridge_revision"] == response["result"]["bridge_revision"]
+    assert response["result"]["kind"] == "get_object"
+    fetched = response["result"]["object"]
+    assert fetched["object_id"] == root_id
+    assert fetched["properties"] == {"tempo": 120.0}
+    assert "tracks" in fetched["relationships"]
+    assert fetched["outcomes"] == []
 
 
 async def test_snapshot_cli_queries_fixture_and_preserves_metadata(tmp_path: Path) -> None:
