@@ -106,3 +106,22 @@ def test_error_query_response_has_explicit_unavailable_metadata() -> None:
     assert response.model_dump()["captured_at"] is None
     assert response.model_dump()["cache_age_seconds"] is None
     assert response.model_dump()["completeness"] == "unavailable"
+
+
+def test_query_response_accepts_cli_validation_error_codes() -> None:
+    for code in (
+        ErrorCode.INVALID_INVOCATION,
+        ErrorCode.INVALID_JSON,
+        ErrorCode.UNKNOWN_ACTION,
+        ErrorCode.VALIDATION_FAILED,
+    ):
+        response = QueryResponse(
+            ok=False,
+            completeness="unavailable",
+            error=QueryError(
+                code=code,
+                message="CLI rejected the request.",
+                recovery={"action": "fix_cli_invocation"},
+            ),
+        )
+        assert response.model_dump(mode="json", exclude_none=True)["error"]["code"] == code

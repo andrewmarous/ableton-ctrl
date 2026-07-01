@@ -41,7 +41,7 @@ class OutcomeStatus(StrEnum):
 
 
 class ErrorCode(StrEnum):
-    """Stable errors exposed to MCP clients."""
+    """Stable errors exposed to clients."""
 
     LIVE_OFFLINE = "live_offline"
     STALE_STATE = "stale_state"
@@ -51,6 +51,10 @@ class ErrorCode(StrEnum):
     PARTIAL_RESULT = "partial_result"
     STALE_CURSOR = "stale_cursor"
     BRIDGE_UNAVAILABLE = "bridge_unavailable"
+    INVALID_INVOCATION = "invalid_invocation"
+    INVALID_JSON = "invalid_json"
+    UNKNOWN_ACTION = "unknown_action"
+    VALIDATION_FAILED = "validation_failed"
 
 
 class BridgeProtocolErrorCode(StrEnum):
