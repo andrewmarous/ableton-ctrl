@@ -109,6 +109,37 @@ def test_unknown_action_returns_structured_error() -> None:
 
 
 @pytest.mark.parametrize(
+    ("payload", "missing_field", "provided_field"),
+    [
+        ({"action": "changes", "session_id": "s1"}, "after_revision", "session_id"),
+        ({"action": "changes", "after_revision": 0}, "session_id", "after_revision"),
+    ],
+)
+def test_changes_explicit_cursor_fields_must_be_supplied_together(
+    payload: dict[str, Any],
+    missing_field: str,
+    provided_field: str,
+) -> None:
+    result = run_cli(json.dumps(payload))
+
+    assert result.returncode == 2
+    response = stdout_json(result)
+    assert response["error"] == {
+        "code": "validation_failed",
+        "message": "Invalid fields for action 'changes'.",
+        "recovery": {
+            "action": "fix_action_fields",
+            "details": [
+                {
+                    "field": missing_field,
+                    "reason": f"Required when {provided_field} is provided",
+                }
+            ],
+        },
+    }
+
+
+@pytest.mark.parametrize(
     ("payload", "field_name"),
     [
         ({"action": "object"}, "object_id"),

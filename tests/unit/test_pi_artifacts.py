@@ -42,6 +42,19 @@ def test_extension_shells_out_to_cli_with_one_json_argument() -> None:
     assert re.search(r"\[JSON\.stringify\(params\)\]", extension)
 
 
+def test_extension_bounds_buffer_and_truncates_tool_content() -> None:
+    extension = extension_artifact_text()
+
+    assert "MAX_CLI_BUFFER_BYTES" in extension
+    assert "maxBuffer: MAX_CLI_BUFFER_BYTES" in extension
+    assert "truncateHead" in extension
+    assert "DEFAULT_MAX_BYTES" in extension
+    assert "DEFAULT_MAX_LINES" in extension
+    assert "mkdtemp" in extension
+    assert "Full JSON saved to" in extension
+    assert "contentText" in extension
+
+
 def test_skill_documents_actions_operational_constraints_and_recovery() -> None:
     skill = skill_artifact_text()
 
@@ -59,6 +72,10 @@ def test_skill_documents_actions_operational_constraints_and_recovery() -> None:
         "Set-name ambiguity",
         "resource",
         "error.recovery",
+        "children` rejects values above 200",
+        "search` rejects values above 200",
+        "session_id` and `after_revision` together",
+        "output was truncated",
     ]:
         assert phrase.lower() in skill.lower()
 

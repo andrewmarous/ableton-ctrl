@@ -47,6 +47,8 @@ Optional fields:
 - `limit` integer, default 20, range 1-200.
 - `start_index` and `page_size` may be used as pagination aliases.
 
+Although the flat Pi schema accepts larger generic `limit` values for other actions, `children` rejects values above 200.
+
 If output is incomplete or paginated, keep the same `object_id`, `relationship`, and `revision`, then increase `offset`/`start_index` until all pages are read.
 
 ### `search`
@@ -63,6 +65,8 @@ Optional fields:
 - `offset` integer, default 0.
 - `limit` integer, default 20, range 1-200.
 - `start_index` and `page_size` may be used as pagination aliases.
+
+Although the flat Pi schema accepts larger generic `limit` values for other actions, `search` rejects values above 200.
 
 Use search to locate tracks, devices, clips, scenes, or objects when you do not already have an object ID.
 
@@ -86,15 +90,15 @@ Required fields:
 - `action: "changes"`
 
 Optional fields:
-- `session_id` string.
-- `after_revision` integer, requires `session_id` when supplied.
+- `session_id` string, only valid together with `after_revision`.
+- `after_revision` integer, only valid together with `session_id`.
 - `limit` integer, default 100, range 1-500.
 
 If `session_id` and `after_revision` are omitted, the CLI snapshots the current Set, identifies its Set name, reads the persisted cursor for that Set, and advances that cursor after a successful changes response. Cursor persistence is keyed by Live Set name.
 
 Set-name ambiguity failure: if the current Live Set name cannot be determined, the command fails with recovery guidance such as saving or naming the current Live Set. Do that before relying on persisted cursors.
 
-Use explicit `session_id` and `after_revision` for revision-pinned workflows where you must not advance the persisted cursor.
+Use explicit `session_id` and `after_revision` together for revision-pinned workflows where you must not advance the persisted cursor.
 
 ### `resource`
 
@@ -125,3 +129,5 @@ Common recovery patterns:
 - `validation_failed` or `unknown_action`: fix the flat action fields and retry.
 
 Never treat partial or unavailable data as complete. State uncertainty in your answer when `completeness` is not `complete`.
+
+If Pi reports that `ableton_ctrl` output was truncated, avoid asking for the same broad result again. Page through relationships, narrow search filters, reduce snapshot depth/page size, or inspect the saved JSON file path named in the truncation notice.

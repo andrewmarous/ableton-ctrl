@@ -1,7 +1,18 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_LINES,
+  formatSize,
+  truncateHead,
+} from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 import { execFile } from "node:child_process";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const MAX_CLI_BUFFER_BYTES = 2 * 1024 * 1024;
 
 const abletonCtrlSchema = Type.Object({
   action: StringEnum(["snapshot", "object", "children", "search", "schema", "changes", "resource"] as const, {
@@ -29,7 +40,7 @@ function runAbletonCtrl(params: AbletonCtrlInput, signal?: AbortSignal): Promise
     const child = execFile(
       "ableton-ctrl",
       [JSON.stringify(params)],
-      { encoding: "utf8", signal },
+      { encoding: "utf8", signal, maxBuffer: MAX_CLI_BUFFER_BYTES },
       (error, stdout, stderr) => {
         const output = stdout.trim();
         if (error && output.length === 0) {
@@ -43,6 +54,26 @@ function runAbletonCtrl(params: AbletonCtrlInput, signal?: AbortSignal): Promise
   });
 }
 
+async function truncatedToolContent(jsonText: string): Promise<string> {
+  const truncated = truncateHead(jsonText, {
+    maxLines: DEFAULT_MAX_LINES,
+    maxBytes: DEFAULT_MAX_BYTES,
+  });
+  if (!truncated.truncated) return jsonText;
+
+  let savedNotice = "Parsed response is available in tool details.";
+  try {
+    const directory = await mkdtemp(join(tmpdir(), "ableton-ctrl-"));
+    const fullOutputPath = join(directory, "response.json");
+    await writeFile(fullOutputPath, jsonText, "utf8");
+    savedNotice = `Full JSON saved to: ${fullOutputPath}. Parsed response is also available in tool details.`;
+  } catch {
+    savedNotice = "Full JSON could not be saved, but parsed response is available in tool details.";
+  }
+
+  return `${truncated.content}\n\n[ableton_ctrl output truncated: ${truncated.outputLines} of ${truncated.totalLines} lines (${formatSize(truncated.outputBytes)} of ${formatSize(truncated.totalBytes)}). ${savedNotice}]`;
+}
+
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "ableton_ctrl",
@@ -52,13 +83,15 @@ export default function (pi: ExtensionAPI) {
     promptGuidelines: [
       "Use ableton_ctrl for read-only Ableton Live Set inspection tasks; never use it to mutate Live.",
       "Pass structured fields directly to ableton_ctrl; the extension shells out to ableton-ctrl with one JSON argument.",
+      "If ableton_ctrl output is truncated, use pagination, narrower searches, or the saved JSON path to inspect details.",
     ],
     parameters: abletonCtrlSchema,
     async execute(_toolCallId, params, signal) {
       const jsonText = await runAbletonCtrl(params, signal);
       const parsed = JSON.parse(jsonText);
+      const contentText = await truncatedToolContent(jsonText);
       return {
-        content: [{ type: "text", text: jsonText }],
+        content: [{ type: "text", text: contentText }],
         details: parsed,
       };
     },

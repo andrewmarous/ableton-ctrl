@@ -139,9 +139,11 @@ class ChangesCommand(CliModel):
     limit: int = Field(default=100, ge=1, le=500)
 
     @model_validator(mode="after")
-    def require_session_for_explicit_cursor(self) -> "ChangesCommand":
+    def require_complete_explicit_cursor(self) -> "ChangesCommand":
         if self.after_revision is not None and self.session_id is None:
             raise ValueError("session_id is required when after_revision is provided")
+        if self.session_id is not None and self.after_revision is None:
+            raise ValueError("after_revision is required when session_id is provided")
         return self
 
 
@@ -243,6 +245,25 @@ def _validate_command(raw: dict[str, Any]) -> tuple[CliCommand | None, QueryResp
             f"Unknown ableton-ctrl action: {action}.",
             UNKNOWN_ACTION_RECOVERY,
         )
+    if action == "changes":
+        has_session_id = raw.get("session_id") is not None
+        has_after_revision = raw.get("after_revision") is not None
+        if has_session_id != has_after_revision:
+            missing_field = "after_revision" if has_session_id else "session_id"
+            provided_field = "session_id" if has_session_id else "after_revision"
+            return None, _error_response(
+                ErrorCode.VALIDATION_FAILED,
+                "Invalid fields for action 'changes'.",
+                {
+                    "action": "fix_action_fields",
+                    "details": [
+                        {
+                            "field": missing_field,
+                            "reason": f"Required when {provided_field} is provided",
+                        }
+                    ],
+                },
+            )
     try:
         command = ACTION_MODELS[action].model_validate(raw)
     except ValidationError as exc:
