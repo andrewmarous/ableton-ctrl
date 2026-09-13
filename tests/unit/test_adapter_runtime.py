@@ -710,6 +710,63 @@ def test_reconnect_authentication_precedes_retained_update_until_ack() -> None:
     assert transport.pending_records == [retained]
 
 
+def test_remote_script_loads_when_product_name_api_is_absent(monkeypatch: object) -> None:
+    class Application:
+        def get_major_version(self) -> int:
+            return 12
+
+        def get_minor_version(self) -> int:
+            return 4
+
+        def get_bugfix_version(self) -> int:
+            return 2
+
+        def __getattribute__(self, name: str) -> object:
+            if name == "get_product_name":
+                raise AssertionError("remote script must not touch missing product name API")
+            return object.__getattribute__(self, name)
+
+    class CInstance:
+        def show_message(self, message: str) -> None:
+            raise AssertionError(message)
+
+    class ControlSurface:
+        def __init__(self, c_instance: CInstance) -> None:
+            self.c_instance = c_instance
+
+        def application(self) -> Application:
+            return Application()
+
+        def song(self) -> object:
+            return object()
+
+        def disconnect(self) -> None:
+            pass
+
+    class Runtime:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+        def tick(self, now: float) -> None:
+            pass
+
+        def disconnect(self) -> None:
+            pass
+
+    framework = types.ModuleType("_Framework")
+    control_surface = types.ModuleType("_Framework.ControlSurface")
+    control_surface.ControlSurface = ControlSurface
+    monkeypatch.setitem(sys.modules, "_Framework", framework)
+    monkeypatch.setitem(sys.modules, "_Framework.ControlSurface", control_surface)
+    module = importlib.import_module("ableton_ctrl.adapter.remote_script")
+    module = importlib.reload(module)
+    monkeypatch.setattr(module, "AdapterRuntime", Runtime)
+    c_instance = CInstance()
+    surface = module.create_instance(c_instance)
+    assert surface._runtime is not None
+    assert surface._version_status == "supported"
+
+
 def test_remote_script_publishes_mismatch_without_song_traversal(monkeypatch: object) -> None:
     class Application:
         def get_major_version(self) -> int:
@@ -755,7 +812,7 @@ def test_remote_script_publishes_mismatch_without_song_traversal(monkeypatch: ob
     surface = module.create_instance(c_instance)
     assert surface._runtime is None
     assert c_instance.messages == [
-        "ableton-ctrl requires Live 12.4.2 Intro; found 12.4.1 Live Intro"
+        "ableton-ctrl requires Live 12.4.2 Intro; found 12.4.1 Intro"
     ]
 
 

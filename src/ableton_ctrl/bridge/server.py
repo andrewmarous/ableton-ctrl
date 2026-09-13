@@ -135,7 +135,7 @@ class BridgeServer:
                 )
                 await self._send_error(writer, "authentication_failed")
                 return
-            self._log("authenticated", role=role)
+            self._log("authenticated", role=role, level=logging.DEBUG)
 
             if role == "adapter":
                 adapter_session = self._validate_hello(message)
@@ -373,6 +373,7 @@ class BridgeServer:
             role="adapter",
             session_id=session_id,
             revision=revision,
+            level=logging.DEBUG,
         )
         await self._send(
             writer,
@@ -409,6 +410,7 @@ class BridgeServer:
             role="query",
             session_id=response.session_id,
             revision=response.bridge_revision,
+            level=logging.DEBUG,
         )
         return True
 
@@ -557,6 +559,7 @@ class BridgeServer:
         session_id: str | None = None,
         revision: int | None = None,
         error_code: str | None = None,
+        level: int = logging.INFO,
     ) -> None:
         fields: dict[str, str | int] = {"event": event}
         if role is not None:
@@ -567,7 +570,7 @@ class BridgeServer:
             fields["revision"] = revision
         if error_code is not None:
             fields["error_code"] = error_code
-        _LOGGER.info("%s", fields)
+        _LOGGER.log(level, "%s", fields)
 
     def _audit_failure(
         self,

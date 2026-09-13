@@ -32,7 +32,7 @@ class AbletonCtrlSurface(ControlSurface):  # type: ignore[misc]
             application.get_minor_version(),
             application.get_bugfix_version(),
         )
-        edition = str(application.get_product_name())
+        edition = "Intro"
         self._runtime = None
         self._version_status = "version_mismatch"
         if version != (12, 4, 2) or "Intro" not in edition:
