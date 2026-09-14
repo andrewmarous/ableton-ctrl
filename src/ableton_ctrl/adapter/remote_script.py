@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from time import monotonic
 from pathlib import Path
+import sys
 from typing import Any
 from uuid import uuid4
 
 from _Framework.ControlSurface import ControlSurface  # type: ignore[import-not-found]
 
 from ableton_ctrl.adapter.evidence import CoverageEvidenceRecorder
-from ableton_ctrl.adapter.manifest import LIVE_12_4_2_INTRO_MANIFEST
+from ableton_ctrl.adapter.compatibility import resolve_edition, runtime_supported, select_profile
 from ableton_ctrl.adapter.runtime import AdapterRuntime, SocketTransport
 from ableton_ctrl.config import BridgeConfig, load_or_create_config
 
@@ -32,35 +33,43 @@ class AbletonCtrlSurface(ControlSurface):  # type: ignore[misc]
             application.get_minor_version(),
             application.get_bugfix_version(),
         )
-        edition = "Intro"
+        config = load_installed_config()
+        profile = select_profile(version, allow_unverified=config.allow_unverified_live)
+        edition = resolve_edition(config.edition)
         self._runtime = None
-        self._version_status = "version_mismatch"
-        if version != (12, 4, 2) or "Intro" not in edition:
+        self._version_status = profile.state
+        if not runtime_supported((sys.version_info.major, sys.version_info.minor)):
             c_instance.show_message(
-                f"ableton-ctrl requires Live 12.4.2 Intro; found "
-                f"{version[0]}.{version[1]}.{version[2]} {edition}"
+                "ableton-ctrl is disabled: unsupported embedded Python "
+                f"{sys.version_info.major}.{sys.version_info.minor}"
             )
             return
-        config = load_installed_config()
+        if not profile.enabled:
+            c_instance.show_message(f"ableton-ctrl is disabled: {profile.reason}")
+            return
         transport = SocketTransport(config.host, config.port, config.secret)
         session_id = str(uuid4())
         evidence = CoverageEvidenceRecorder(
             Path.home() / "Library" / "Logs" / "ableton-ctrl" / "coverage.jsonl",
-            LIVE_12_4_2_INTRO_MANIFEST,
+            profile.manifest,
             session_id=session_id,
-            live_version="12.4.2",
-            edition="Intro",
+            live_version=profile.live_version,
+            edition=edition.name,
+            edition_source=edition.source,
+            compatibility=profile.state,
         )
         self._runtime = AdapterRuntime(
             root=self.song(),
-            manifest=LIVE_12_4_2_INTRO_MANIFEST,
+            manifest=profile.manifest,
             transport=transport,
             session_id=session_id,
-            live_version="12.4.2",
-            edition="Intro",
+            live_version=profile.live_version,
+            edition=edition.name,
+            edition_source=edition.source,
+            compatibility=profile.state,
             evidence=evidence,
         )
-        self._version_status = "supported"
+        self._version_status = profile.state
 
     def update_display(self) -> None:
         if self._runtime is not None:

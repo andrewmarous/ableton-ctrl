@@ -177,6 +177,34 @@ def test_same_index_replacement_gets_new_source_id_and_removes_old_identity() ->
     assert second.removed_source_ids == (old_id,)
 
 
+def test_reordering_preserves_source_ids_and_updates_paths() -> None:
+    first_track = FakeTrack()
+    second_track = FakeTrack()
+    song = FakeSong([first_track, second_track])
+    engine = DiscoveryEngine(_manifest_with_test_members())
+    first = engine.observe_targeted(
+        song, DiscoveryBudget(1_000, 1_000), frozenset({"structural"}), frozenset()
+    )
+    ids = {id(first_track): None, id(second_track): None}
+    for observation in first.observations:
+        if observation.type == "Track":
+            source_identity = id(first_track) if observation.path.endswith("/0") else id(second_track)
+            ids[source_identity] = observation.source_id
+
+    song.tracks = [second_track, first_track]
+    second = engine.observe_targeted(
+        song, DiscoveryBudget(1_000, 1_000), frozenset({"structural"}), frozenset()
+    )
+    reordered = {
+        observation.path: observation.source_id
+        for observation in second.observations
+        if observation.type == "Track"
+    }
+    assert reordered["Song/tracks/0"] == ids[id(second_track)]
+    assert reordered["Song/tracks/1"] == ids[id(first_track)]
+    assert second.removed_source_ids == ()
+
+
 def test_targeted_observation_reads_only_due_or_dirty_members() -> None:
     reads: list[str] = []
 
@@ -284,7 +312,11 @@ def test_manifest_is_internally_safe_and_complete() -> None:
         "Clip",
         "Device",
         "DeviceParameter",
-        "MixerDevice",
+            "MixerDevice",
+            "Chain",
+            "DrumPad",
+            "CuePoint",
+            "SongView",
     }
     assert set(LIVE_12_4_2_INTRO_MANIFEST) == expected_types
 

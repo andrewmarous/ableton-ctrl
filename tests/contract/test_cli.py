@@ -95,14 +95,22 @@ def test_unknown_action_returns_structured_error() -> None:
         "message": "Unknown ableton-ctrl action: launch_clip.",
         "recovery": {
             "action": "use_supported_action",
-            "supported_actions": [
-                "snapshot",
+                "supported_actions": [
+                    "status",
+                    "doctor",
+                    "snapshot",
                 "object",
                 "children",
                 "search",
-                "schema",
-                "changes",
-                "resource",
+                    "schema",
+                    "changes",
+                    "project_summary",
+                    "track_summary",
+                    "device_tree",
+                        "selection",
+                        "project_diff",
+                        "clip_notes",
+                        "resource",
             ],
         },
     }
@@ -762,7 +770,7 @@ async def test_changes_cli_persists_implicit_cursor_across_processes(tmp_path: P
     assert third_response["result"]["next_revision"] == 2
 
 
-async def test_changes_cli_implicit_cursors_are_keyed_by_set_name_only(tmp_path: Path) -> None:
+async def test_changes_cli_implicit_cursors_are_keyed_by_bridge_and_session(tmp_path: Path) -> None:
     first_bridge = BridgeServer(host="127.0.0.1", port=0, secret=SECRET, store=GraphStore())
     await first_bridge.start()
     write_config(tmp_path, first_bridge.port)
@@ -800,10 +808,11 @@ async def test_changes_cli_implicit_cursors_are_keyed_by_set_name_only(tmp_path:
     assert second_response["ok"] is True
     assert [item["revision"] for item in second_response["result"]["changes"]] == [1]
     cursor_files = sorted((tmp_path / "cursors" / "changes").glob("*.json"))
-    assert [path.name for path in cursor_files] == ["Set%20A.json", "Set%20B.json"]
+    assert len(cursor_files) == 2
+    assert all(path.name.endswith("--s1.json") for path in cursor_files)
 
 
-async def test_changes_cli_missing_set_name_returns_structured_error_without_cursor(
+async def test_changes_cli_does_not_require_a_set_display_name_for_cursor_identity(
     tmp_path: Path,
 ) -> None:
     bridge = BridgeServer(host="127.0.0.1", port=0, secret=SECRET, store=GraphStore())
@@ -823,17 +832,9 @@ async def test_changes_cli_missing_set_name_returns_structured_error_without_cur
 
     assert result.returncode == 0
     response = stdout_json(result)
-    assert response == {
-        "protocol_version": 1,
-        "ok": False,
-        "completeness": "unavailable",
-        "error": {
-            "code": "stale_state",
-            "message": "The current Ableton Live Set name could not be determined.",
-            "recovery": {"action": "save_or_name_current_live_set"},
-        },
-    }
-    assert not (tmp_path / "cursors").exists()
+    assert response["ok"] is True
+    assert response["result"]["next_revision"] == 1
+    assert len(list((tmp_path / "cursors" / "changes").glob("*--s1.json"))) == 1
 
 
 async def test_changes_cli_explicit_after_revision_is_nonmutating(tmp_path: Path) -> None:
@@ -866,7 +867,8 @@ async def test_changes_cli_explicit_after_revision_is_nonmutating(tmp_path: Path
     implicit_response = stdout_json(implicit)
     assert implicit_response["ok"] is True
     assert [item["revision"] for item in implicit_response["result"]["changes"]] == [1]
-    assert (tmp_path / "cursors" / "changes" / "Explicit%20Set.json").exists()
+    cursor_files = list((tmp_path / "cursors" / "changes").glob("*--s1.json"))
+    assert len(cursor_files) == 1
 
 
 async def apply_fixture(

@@ -1,6 +1,6 @@
 # ableton-ctrl
 
-Pi-compatible, read-only inspection of Ableton Live 12 Intro 12.4.2 Sets.
+Pi-compatible, read-only inspection of Ableton Live 12 Sets.
 
 `ableton-ctrl` lets Pi inspect the active Live Set through a local bridge without
 using MCP. It exposes bounded snapshots, object lookup, relationship pagination,
@@ -9,12 +9,13 @@ existing MCP server remains available as an optional compatibility interface.
 
 > Ableton's Python API is unsupported and undocumented. Runtime availability can
 > change across Live builds. This project supports only macOS with Ableton Live
-> 12 Intro 12.4.2 and requires a real-session smoke test for each release.
+> Live 12.4.2 is the tested target. Other Live 12 builds require explicit opt-in.
+> Each release requires a real-session test with its target build and edition.
 
 ## Prerequisites
 
 - macOS
-- Ableton Live 12 Intro 12.4.2
+- Ableton Live 12.4.2 Standard for the release target
 - Python 3.11 or newer
 - `uv`
 - Pi, for the primary agent integration path
@@ -28,12 +29,7 @@ uv sync
 uv run python scripts/install_remote_script.py
 ```
 
-In Live, open Preferences > Link, Tempo & MIDI and select `AbletonCtrl` as a
-Control Surface. Then start the local bridge:
-
-```bash
-uv run ableton-ctrl-bridge
-```
+In Live, open Preferences > Link, Tempo & MIDI. Select `AbletonCtrl` as a Control Surface.
 
 Install the global Pi extension and skill:
 
@@ -48,13 +44,21 @@ The Pi installer writes global artifacts under:
 ~/.pi/agent/skills/ableton-ctrl/SKILL.md
 ```
 
-It is conservative: it creates these files only when absent and refuses to
-overwrite existing files. If reinstalling, manually delete the old files first,
-then rerun `uv run ableton-ctrl-install-pi`.
+The installer records checksums for managed files.
+To install a package update, run `uv run ableton-ctrl-install-pi --upgrade`.
+The upgrade makes backups and replaces only files that match their recorded checksums.
+It refuses to replace a user-modified file.
 
-After installation, run `/reload` in Pi or restart Pi. Pi should then have one
-read-only tool named `ableton_ctrl` and a matching skill that explains when and
-how to use it.
+After installation, run `/reload` in Pi or restart Pi.
+The integration starts in the off state.
+
+Run `/ableton on` to start its managed bridge.
+Run `/ableton off` to disable inspection and stop its owned bridge.
+Use `/ableton status` and `/ableton doctor` for diagnostics.
+
+If Pi finds an authenticated external bridge, Pi attaches to it.
+Pi never stops an external bridge.
+Reload, session replacement, fork, and exit stop only a bridge owned by that extension instance.
 
 ## Using the Pi tool
 
@@ -88,12 +92,11 @@ uv run ableton-ctrl '{"action":"resource","name":"glossary"}'
 uv run ableton-ctrl '{"action":"changes"}'
 ```
 
-Supported actions are `snapshot`, `object`, `children`, `search`, `schema`,
-`changes`, and `resource`. For explicit change queries, provide `session_id` and
+Supported actions are `status`, `doctor`, `snapshot`, `object`, `children`, `search`,
+`schema`, `changes`, and `resource`. For explicit change queries, provide `session_id` and
 `after_revision` together. When both are omitted, `changes` uses a persisted
-cursor keyed by the current Ableton Live Set name; if the Set name cannot be
-determined, the command fails with a structured error instead of using an
-ambiguous fallback cursor.
+cursor keyed by the bridge generation and Live session identity.
+Bridge restarts and Set replacements use new cursor identities.
 
 Configuration and the bridge shared secret are stored at:
 

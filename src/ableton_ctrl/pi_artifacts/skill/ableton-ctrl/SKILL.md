@@ -11,6 +11,25 @@ The tool accepts flat structured fields and returns the JSON result from the loc
 
 ## Actions
 
+The user controls the integration with `/ableton on`, `/ableton off`, `/ableton status`, and `/ableton doctor`.
+Do not start the bridge from a tool call.
+If the integration is off, Live-data actions return `integration_disabled`.
+The `status`, `doctor`, and `resource` actions remain available while the integration is off.
+
+### `status`
+
+Read the authenticated bridge and Live connection state.
+
+Required fields:
+- `action: "status"`
+
+### `doctor`
+
+Read installation, configuration, executable, authentication, bridge, and Live diagnostics.
+
+Required fields:
+- `action: "doctor"`
+
 ### `snapshot`
 
 Get a Live Set snapshot.
@@ -94,9 +113,9 @@ Optional fields:
 - `after_revision` integer, only valid together with `session_id`.
 - `limit` integer, default 100, range 1-500.
 
-If `session_id` and `after_revision` are omitted, the CLI snapshots the current Set, identifies its Set name, reads the persisted cursor for that Set, and advances that cursor after a successful changes response. Cursor persistence is keyed by Live Set name.
-
-Set-name ambiguity failure: if the current Live Set name cannot be determined, the command fails with recovery guidance such as saving or naming the current Live Set. Do that before relying on persisted cursors.
+If both fields are absent, the CLI reads and advances a persisted cursor.
+The bridge generation and Live session identity key this cursor.
+Set display names do not identify cursors.
 
 Use explicit `session_id` and `after_revision` together for revision-pinned workflows where you must not advance the persisted cursor.
 
@@ -108,7 +127,34 @@ Required fields:
 - `action: "resource"`
 - `name` one of `glossary`, `interpretation`, or `limitations`.
 
-Use resources to learn Ableton terminology, interpret inspection output, and understand Live 12.4.2 Intro limitations before answering ambiguous questions.
+Use resources to learn Ableton terminology and interpret inspection output.
+Runtime availability depends on the Live build, not only the edition label.
+
+### `project_summary`
+
+Use `action: "project_summary"` for project counts, tempo, groups, returns, and observed arrangement extent.
+
+### `track_summary`
+
+Use `action: "track_summary"` with an `object_id` for clips, routing, devices, sends, and mixer state.
+
+### `device_tree`
+
+Use `action: "device_tree"` with an `object_id` for bounded rack, chain, pad, and device contents.
+The optional `depth` and `page_size` fields limit the result.
+
+### `selection`
+
+Use `action: "selection"` to read the current track, scene, device, and detail clip selection.
+
+### `project_diff`
+
+Use `action: "project_diff"` with explicit `session_id` and `after_revision` fields.
+The result contains deterministic readable changes and the next revision.
+
+### `clip_notes`
+
+Use `action: "clip_notes"` with a current MIDI clip `object_id`, `session_id`, beat range, and pitch range. Keep `note_limit` and `deadline_ms` bounded; `truncated: true` means the requested range was only partially returned.
 
 ## Object IDs and revisions
 
@@ -123,6 +169,7 @@ All failures are structured. Inspect `ok`, `error.code`, `error.message`, `error
 Common recovery patterns:
 - `live_offline`: start Live and the ableton-ctrl bridge/Remote Script.
 - `bridge_unavailable`: start or restart `ableton-ctrl-bridge`.
+- `integration_disabled`: ask the user to run `/ableton on`.
 - `stale_state`, `session_changed`, or `stale_cursor`: take a fresh snapshot and retry with current IDs/revisions.
 - `partial_result`: paginate, reduce query scope, or wait for discovery to complete.
 - `unsupported_property`: call `schema` or use resources to find supported relationships/properties.

@@ -18,6 +18,9 @@ class BridgeConfig(BaseModel):
     host: Literal["127.0.0.1"] = "127.0.0.1"
     port: int = Field(default=8765, ge=1, le=65535)
     secret: str = Field(min_length=43)
+    edition: str | None = Field(default=None, min_length=1)
+    allow_unverified_live: bool = False
+    bridge_executable: str | None = Field(default=None, min_length=1)
 
 
 def _write_all(file_descriptor: int, data: bytes) -> None:

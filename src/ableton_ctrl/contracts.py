@@ -51,6 +51,8 @@ class ErrorCode(StrEnum):
     PARTIAL_RESULT = "partial_result"
     STALE_CURSOR = "stale_cursor"
     BRIDGE_UNAVAILABLE = "bridge_unavailable"
+    AUTHENTICATION_FAILED = "authentication_failed"
+    INTEGRATION_DISABLED = "integration_disabled"
     INVALID_INVOCATION = "invalid_invocation"
     INVALID_JSON = "invalid_json"
     UNKNOWN_ACTION = "unknown_action"
@@ -94,6 +96,9 @@ class UpdateBatch(BaseModel):
     protocol_version: Literal[1] = 1
     session_id: str = Field(min_length=1)
     live_version: str
+    edition: str = "unknown"
+    edition_source: Literal["detection", "configuration", "unavailable"] = "unavailable"
+    compatibility: Literal["tested", "unverified", "unsupported"] = "unverified"
     captured_at: datetime
     observations: list[ObjectObservation]
     removed_source_ids: list[str]
@@ -177,6 +182,51 @@ class ResourceQuery(QueryModel):
     name: str = Field(min_length=1)
 
 
+class ProjectSummaryQuery(QueryModel):
+    type: Literal["project_summary"]
+
+
+class TrackSummaryQuery(QueryModel):
+    type: Literal["track_summary"]
+    object_id: str = Field(min_length=1)
+
+
+class DeviceTreeQuery(QueryModel):
+    type: Literal["device_tree"]
+    object_id: str = Field(min_length=1)
+    depth: int = Field(default=4, ge=0, le=8)
+    page_size: int = Field(default=20, ge=1, le=200)
+
+
+class SelectionQuery(QueryModel):
+    type: Literal["selection"]
+
+
+class ProjectDiffQuery(QueryModel):
+    type: Literal["project_diff"]
+    session_id: str = Field(min_length=1)
+    after_revision: int = Field(ge=0)
+    limit: int = Field(default=100, ge=1, le=500)
+
+
+class ClipNotesQuery(QueryModel):
+    type: Literal["clip_notes"]
+    session_id: str = Field(min_length=1)
+    object_id: str = Field(min_length=1)
+    from_beat: float = Field(ge=-1_000_000, le=1_000_000)
+    beat_span: float = Field(gt=0, le=256)
+    from_pitch: int = Field(ge=0, le=127)
+    pitch_span: int = Field(ge=1, le=128)
+    note_limit: int = Field(default=500, ge=1, le=1_000)
+    deadline_ms: int = Field(default=2_000, ge=100, le=5_000)
+
+    @model_validator(mode="after")
+    def validate_pitch_range(self) -> "ClipNotesQuery":
+        if self.from_pitch + self.pitch_span > 128:
+            raise ValueError("pitch range must end at or before 128")
+        return self
+
+
 QueryRequest: TypeAlias = Annotated[
     StatusQuery
     | SnapshotQuery
@@ -185,7 +235,13 @@ QueryRequest: TypeAlias = Annotated[
     | SearchQuery
     | SchemaQuery
     | ChangesQuery
-    | ResourceQuery,
+    | ResourceQuery
+    | ProjectSummaryQuery
+    | TrackSummaryQuery
+    | DeviceTreeQuery
+    | SelectionQuery
+    | ProjectDiffQuery
+    | ClipNotesQuery,
     Field(discriminator="type"),
 ]
 
@@ -204,7 +260,11 @@ class QueryMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     live_version: str
+    edition: str = "unknown"
+    edition_source: Literal["detection", "configuration", "unavailable"] = "unavailable"
+    compatibility: Literal["tested", "unverified", "unsupported"] = "unverified"
     session_id: str = Field(min_length=1)
+    bridge_generation: str = Field(default="unknown", min_length=1)
     bridge_revision: int = Field(ge=0)
     captured_at: datetime
     cache_age_seconds: float = Field(ge=0)
@@ -217,7 +277,11 @@ class StatusPayload(BaseModel):
     kind: Literal["status"] = "status"
     live_connected: bool
     live_version: str | None
+    edition: str | None = None
+    edition_source: Literal["detection", "configuration", "unavailable"] | None = None
+    compatibility: Literal["tested", "unverified", "unsupported"] | None = None
     session_id: str | None
+    bridge_generation: str = Field(default="unknown", min_length=1)
     bridge_revision: int = Field(ge=0)
     captured_at: datetime | None
     cache_age_seconds: float | None = Field(ge=0)
@@ -288,6 +352,58 @@ class ResourcePayload(BaseModel):
     resource: JsonValue
 
 
+class DoctorPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["doctor"] = "doctor"
+    healthy: bool
+    checks: list[JsonValue]
+
+
+class ProjectSummaryPayload(QueryMetadata):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["project_summary"] = "project_summary"
+    summary: JsonValue
+
+
+class TrackSummaryPayload(QueryMetadata):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["track_summary"] = "track_summary"
+    summary: JsonValue
+
+
+class DeviceTreePayload(QueryMetadata):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["device_tree"] = "device_tree"
+    tree: JsonValue
+
+
+class SelectionPayload(QueryMetadata):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["selection"] = "selection"
+    selection: JsonValue
+
+
+class ProjectDiffPayload(QueryMetadata):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["project_diff"] = "project_diff"
+    diff: JsonValue
+
+
+class ClipNotesPayload(QueryMetadata):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["clip_notes"] = "clip_notes"
+    notes: list[JsonValue]
+    truncated: bool
+    requested_range: JsonValue
+
+
 QueryPayload: TypeAlias = Annotated[
     StatusPayload
     | SnapshotPayload
@@ -296,7 +412,14 @@ QueryPayload: TypeAlias = Annotated[
     | SearchPayload
     | SchemaPayload
     | ChangesPayload
-    | ResourcePayload,
+    | ResourcePayload
+    | DoctorPayload
+    | ProjectSummaryPayload
+    | TrackSummaryPayload
+    | DeviceTreePayload
+    | SelectionPayload
+    | ProjectDiffPayload
+    | ClipNotesPayload,
     Field(discriminator="kind"),
 ]
 
@@ -307,7 +430,11 @@ class QueryResponse(BaseModel):
     protocol_version: Literal[1] = 1
     ok: bool
     live_version: str | None = None
+    edition: str | None = None
+    edition_source: Literal["detection", "configuration", "unavailable"] | None = None
+    compatibility: Literal["tested", "unverified", "unsupported"] | None = None
     session_id: str | None = Field(default=None, min_length=1)
+    bridge_generation: str | None = Field(default=None, min_length=1)
     bridge_revision: int | None = Field(default=None, ge=0)
     captured_at: datetime | None = None
     cache_age_seconds: float | None = Field(default=None, ge=0)
@@ -326,13 +453,19 @@ class QueryResponse(BaseModel):
         if self.ok and self.result is not None and isinstance(self.result, QueryMetadata):
             metadata_fields = (
                 "live_version",
+                "edition",
+                "edition_source",
+                "compatibility",
                 "session_id",
+                "bridge_generation",
                 "bridge_revision",
                 "captured_at",
                 "cache_age_seconds",
                 "completeness",
             )
             for field_name in metadata_fields:
+                if getattr(self, field_name) is None:
+                    object.__setattr__(self, field_name, getattr(self.result, field_name))
                 if getattr(self, field_name) != getattr(self.result, field_name):
                     raise ValueError(f"response {field_name} must match result metadata")
         return self

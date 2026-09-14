@@ -97,11 +97,16 @@ def install(
             "class BridgeConfig:\n"
             "    host: str\n"
             "    port: int\n"
-            "    secret: str\n\n"
+            "    secret: str\n"
+            "    edition: str | None = None\n"
+            "    allow_unverified_live: bool = False\n\n"
             "def load_or_create_config(directory=None):\n"
             "    path = Path(__file__).with_name('config.json')\n"
             "    value = json.loads(path.read_text())\n"
-            "    return BridgeConfig(value['host'], value['port'], value['secret'])\n"
+            "    return BridgeConfig(\n"
+            "        value['host'], value['port'], value['secret'],\n"
+            "        value.get('edition'), value.get('allow_unverified_live', False),\n"
+            "    )\n"
         )
         (staging / "__init__.py").write_text(
             '"""AbletonCtrl Remote Script entrypoint."""\n'

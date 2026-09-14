@@ -62,6 +62,7 @@ def test_remove_then_readd_source_allocates_new_object_id_and_old_id_stays_inval
     old_id = store.search(name="Track 1", limit=10).items[0].object_id
     removal = batch("s1").model_copy(
         update={
+            "discovery_complete": True,
             "observations": [
                 batch("s1").observations[0].model_copy(update={"relationships": {"tracks": []}})
             ],
@@ -232,6 +233,7 @@ def test_invalid_batch_is_atomic_and_revision_snapshots_are_immutable() -> None:
     store.apply(batch("s1"))
     invalid = batch("s1", "Bass").model_copy(
         update={
+            "discovery_complete": True,
             "observations": [
                 batch("s1", "Bass")
                 .observations[0]
@@ -243,6 +245,27 @@ def test_invalid_batch_is_atomic_and_revision_snapshots_are_immutable() -> None:
         store.apply(invalid)
     assert store.status().bridge_revision == 1
     assert store.search(name="Track 1", revision=1).total == 1
+
+
+def test_incremental_graph_reports_unpublished_relationship_targets_as_partial() -> None:
+    store = GraphStore()
+    first = batch("s1").model_copy(
+        update={"observations": [batch("s1").observations[0]], "discovery_complete": False}
+    )
+    store.apply(first)
+    snapshot = store.snapshot()
+    assert snapshot.completeness == "partial"
+    assert snapshot.root.relationships["tracks"].total == 1
+    assert snapshot.root.relationships["tracks"].items == []
+
+    store.apply(
+        batch("s1").model_copy(
+            update={"observations": [batch("s1").observations[1]], "discovery_complete": True}
+        )
+    )
+    complete = store.snapshot()
+    assert complete.completeness == "complete"
+    assert len(complete.root.relationships["tracks"].items) == 1
 
 
 def test_changes_removals_failures_and_schema_are_aggregated() -> None:
@@ -271,6 +294,65 @@ def test_changes_removals_failures_and_schema_are_aggregated() -> None:
         "removed",
         "relationships_changed",
     ]
+
+
+def test_project_track_device_and_selection_summaries_share_one_revision() -> None:
+    update = batch("s1")
+    update.discovery_complete = True
+    update.observations[0].properties.update({"name": "Summary Set"})
+    update.observations[0].relationships.update(
+        {"return_tracks": ["return:1"], "view": ["view"]}
+    )
+    update.observations[1].properties.update({"is_foldable": True, "mute": False})
+    update.observations[1].relationships.update(
+        {
+            "arrangement_clips": ["clip"],
+            "devices": ["device"],
+            "mixer_device": ["mixer"],
+        }
+    )
+    for source_id, object_type, properties, relationships in [
+        ("return:1", "Track", {"name": "Return A"}, {}),
+        ("clip", "Clip", {"end_time": 16.0}, {}),
+        ("mixer", "MixerDevice", {}, {"sends": ["send"]}),
+        ("send", "DeviceParameter", {"name": "Send A"}, {}),
+        ("device", "Device", {"name": "Rack"}, {"chains": ["chain"]}),
+        ("chain", "Chain", {"name": "Chain 1"}, {"devices": []}),
+        ("view", "SongView", {}, {"selected_track": ["track:1"]}),
+    ]:
+        update.observations.append(
+            ObjectObservation(
+                source_id=source_id,
+                type=object_type,
+                path=f"Live Set/{source_id}",
+                properties=properties,
+                relationships=relationships,
+                outcomes=[],
+                captured_at=NOW,
+            )
+        )
+    store = GraphStore(bridge_generation="bridge-1")
+    store.apply(update)
+    track_id = store.search(name="Track 1", object_type="Track").items[0].object_id
+    device_id = store.search(object_type="Device").items[0].object_id
+
+    project = store.project_summary()
+    track = store.track_summary(track_id)
+    tree = store.device_tree(device_id, depth=4, page_size=20)
+    selection = store.selection()
+    diff = store.project_diff("s1", after_revision=0, limit=100)
+
+    assert project.value["return_track_count"] == 1
+    assert project.value["observed_arrangement_end"] == 16.0
+    assert track.value["sends"] == 1
+    assert tree.value["children"][0]["type"] == "Chain"
+    assert selection.value["selected_track"]["object_id"] == track_id
+    assert diff.value["next_revision"] == 1
+    assert any("added" in line for line in diff.value["lines"])
+    assert {item.bridge_revision for item in (project, track, tree, selection)} == {1}
+    assert {item.bridge_generation for item in (project, track, tree, selection)} == {
+        "bridge-1"
+    }
 
 
 @pytest.mark.parametrize(
@@ -378,11 +460,16 @@ def test_all_query_results_are_json_serializable_and_versioned() -> None:
 
 def test_offline_status_is_versioned_serializable_and_has_completeness() -> None:
     payload = json.loads(GraphStore().status().model_dump_json())
+    bridge_generation = payload.pop("bridge_generation")
+    assert isinstance(bridge_generation, str) and bridge_generation
     assert payload == {
         "protocol_version": 1,
         "state": "live_offline",
         "live_connected": False,
         "live_version": None,
+        "edition": None,
+        "edition_source": None,
+        "compatibility": None,
         "session_id": None,
         "bridge_revision": 0,
         "captured_at": None,

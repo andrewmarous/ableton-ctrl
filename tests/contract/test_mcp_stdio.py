@@ -27,8 +27,14 @@ async def test_exposes_exact_read_only_surface(tmp_path: Path) -> None:
         "list_children",
         "search",
         "get_schema",
-        "get_changes",
-    }
+            "get_changes",
+            "project_summary",
+            "track_summary",
+            "device_tree",
+                "selection",
+            "project_diff",
+            "clip_notes",
+        }
     assert {str(resource.uri) for resource in resources} == {
         "ableton://glossary",
         "ableton://interpretation",
@@ -201,7 +207,8 @@ async def test_maps_stale_cursor_session_change_live_offline_and_object_outcomes
                 expected_revision=1,
             )
             changed_session = await call(session, "get_changes", {})
-            assert changed_session["error"]["code"] == "session_changed"
+            assert changed_session["ok"] is True
+            assert changed_session["result"]["next_revision"] == 1
             old_object = await call(session, "get_object", {"object_id": root_id})
             assert old_object["error"]["code"] == "session_changed"
 

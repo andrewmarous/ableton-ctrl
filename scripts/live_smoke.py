@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate a Live 12.4.2 Intro coverage recording and write release artifacts."""
+"""Validate a parameterized Live coverage recording and write release artifacts."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, cast
 
-from ableton_ctrl.adapter.manifest import LIVE_12_4_2_INTRO_MANIFEST
+from ableton_ctrl.adapter.manifest import LIVE_12_MANIFEST, TypeSpec
 
 STATUSES = ("supported", "unavailable", "read_failed", "excluded")
 TARGET_VERSION = "12.4.2"
@@ -52,21 +52,29 @@ def _read_records(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _manifest_members() -> set[tuple[str, str]]:
+def _manifest_members(manifest: dict[str, TypeSpec]) -> set[tuple[str, str]]:
     members: set[tuple[str, str]] = set()
-    for type_name, spec in LIVE_12_4_2_INTRO_MANIFEST.items():
+    for type_name, spec in manifest.items():
         members.update((type_name, member.name) for member in spec.properties)
         members.update((type_name, member.name) for member in spec.relationships)
     return members
 
 
-def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
+def validate(
+    records: list[dict[str, Any]],
+    *,
+    target_version: str = TARGET_VERSION,
+    target_edition: str = TARGET_EDITION,
+    manifest: dict[str, TypeSpec] = LIVE_12_MANIFEST,
+) -> dict[str, Any]:
     run_records = [record for record in records if record.get("kind") == "run"]
     if len(run_records) != 1:
         raise CoverageValidationError("coverage requires exactly one run record")
     run = run_records[0]
-    if run.get("live_version") != TARGET_VERSION or run.get("edition") != TARGET_EDITION:
-        raise CoverageValidationError("coverage requires Live 12.4.2 Intro")
+    if run.get("live_version") != target_version or run.get("edition") != target_edition:
+        raise CoverageValidationError(
+            f"coverage requires Live {target_version} {target_edition}"
+        )
     if run.get("discovery_complete") is not True:
         raise CoverageValidationError("discovery did not complete")
     maximum = run.get("max_tick_duration_ms")
@@ -84,7 +92,7 @@ def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
         )
 
     member_records = [record for record in records if record.get("kind") == "member"]
-    expected = _manifest_members()
+    expected = _manifest_members(manifest)
     keys = [(record.get("object_type"), record.get("member")) for record in member_records]
     counts = Counter(keys)
     duplicates = sorted(key for key, count in counts.items() if count > 1)
@@ -123,7 +131,7 @@ def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
 
     normalized.sort(key=lambda item: (item["object_type"], item["status"], item["member"]))
     return {
-        "target": {"edition": TARGET_EDITION, "live_version": TARGET_VERSION},
+        "target": {"edition": target_edition, "live_version": target_version},
         "run": {
             "discovery_complete": True,
             "max_tick_duration_ms": maximum_ms,
@@ -139,7 +147,7 @@ def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _markdown(report: dict[str, Any]) -> str:
     lines = [
-        "# Live 12.4.2 Intro coverage",
+        f"# Live {report['target']['live_version']} {report['target']['edition']} coverage",
         "",
         f"- Discovery complete: {str(report['run']['discovery_complete']).lower()}",
         f"- Maximum tick duration: {report['run']['max_tick_duration_ms']} ms",
@@ -163,8 +171,20 @@ def _markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def validate_and_write(input_path: Path, output: Path) -> dict[str, Any]:
-    report = validate(_read_records(input_path))
+def validate_and_write(
+    input_path: Path,
+    output: Path,
+    *,
+    target_version: str = TARGET_VERSION,
+    target_edition: str = TARGET_EDITION,
+    manifest: dict[str, TypeSpec] = LIVE_12_MANIFEST,
+) -> dict[str, Any]:
+    report = validate(
+        _read_records(input_path),
+        target_version=target_version,
+        target_edition=target_edition,
+        manifest=manifest,
+    )
     output.mkdir(parents=True, exist_ok=True)
     (output / "coverage.json").write_text(
         json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n"
@@ -177,9 +197,16 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("input", type=Path, metavar="INPUT.jsonl")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--target-version", default=TARGET_VERSION)
+    parser.add_argument("--edition", default=TARGET_EDITION)
     arguments = parser.parse_args()
     try:
-        validate_and_write(arguments.input, arguments.output)
+        validate_and_write(
+            arguments.input,
+            arguments.output,
+            target_version=arguments.target_version,
+            target_edition=arguments.edition,
+        )
     except (OSError, CoverageValidationError) as exc:
         parser.exit(1, f"coverage validation failed: {exc}\n")
     return 0

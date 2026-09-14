@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
+import stat
 import sys
 from pathlib import Path
 from typing import Any, Literal, Sequence, cast
@@ -17,6 +19,8 @@ from ableton_ctrl.contracts import (
     AdapterRuntimeMetadata,
     ChangesPayload,
     ChangesQuery,
+    DoctorPayload,
+    DeviceTreeQuery,
     ErrorCode,
     GetObjectQuery,
     JsonValue,
@@ -24,6 +28,8 @@ from ableton_ctrl.contracts import (
     QueryError,
     QueryRequest,
     QueryResponse,
+    ProjectSummaryQuery,
+    ProjectDiffQuery,
     ResourcePayload,
     ResourceQuery,
     SnapshotPayload,
@@ -32,12 +38,18 @@ from ableton_ctrl.contracts import (
     SnapshotQuery,
     StatusPayload,
     StatusQuery,
+    SelectionQuery,
+    TrackSummaryQuery,
+    ClipNotesQuery,
 )
 from ableton_ctrl.mcp.client import BridgeClient
 
 CLI_USAGE_RECOVERY: dict[str, JsonValue] = {"action": "call_with_one_json_argument"}
 INVALID_JSON_RECOVERY: dict[str, JsonValue] = {"action": "pass_valid_json_object"}
-SUPPORTED_ACTIONS = ["snapshot", "object", "children", "search", "schema", "changes", "resource"]
+SUPPORTED_ACTIONS = [
+    "status", "doctor", "snapshot", "object", "children", "search", "schema", "changes",
+    "project_summary", "track_summary", "device_tree", "selection", "project_diff", "clip_notes", "resource"
+]
 UNKNOWN_ACTION_RECOVERY: dict[str, JsonValue] = cast(
     dict[str, JsonValue],
     {"action": "use_supported_action", "supported_actions": SUPPORTED_ACTIONS},
@@ -64,6 +76,54 @@ class SnapshotCommand(CliModel):
     action: Literal["snapshot"]
     depth: int = Field(default=1, ge=0, le=8)
     page_size: int = Field(default=20, ge=1, le=200)
+
+
+class StatusCommand(CliModel):
+    action: Literal["status"]
+    stale_after_seconds: float = Field(default=5.0, gt=0)
+
+
+class DoctorCommand(CliModel):
+    action: Literal["doctor"]
+    stale_after_seconds: float = Field(default=5.0, gt=0)
+
+
+class ProjectSummaryCommand(CliModel):
+    action: Literal["project_summary"]
+
+
+class TrackSummaryCommand(CliModel):
+    action: Literal["track_summary"]
+    object_id: str = Field(min_length=1)
+
+
+class DeviceTreeCommand(CliModel):
+    action: Literal["device_tree"]
+    object_id: str = Field(min_length=1)
+    depth: int = Field(default=4, ge=0, le=8)
+    page_size: int = Field(default=20, ge=1, le=200)
+
+
+class SelectionCommand(CliModel):
+    action: Literal["selection"]
+
+
+class ProjectDiffCommand(CliModel):
+    action: Literal["project_diff"]
+    session_id: str = Field(min_length=1)
+    after_revision: int = Field(ge=0)
+    limit: int = Field(default=100, ge=1, le=500)
+
+class ClipNotesCommand(CliModel):
+    action: Literal["clip_notes"]
+    session_id: str = Field(min_length=1)
+    object_id: str = Field(min_length=1)
+    from_beat: float
+    beat_span: float = Field(gt=0, le=256)
+    from_pitch: int = Field(ge=0, le=127)
+    pitch_span: int = Field(ge=1, le=128)
+    note_limit: int = Field(default=500, ge=1, le=1000)
+    deadline_ms: int = Field(default=2000, ge=100, le=5000)
 
 
 class ObjectCommand(CliModel):
@@ -160,7 +220,15 @@ class ResourceCommand(CliModel):
 
 
 CliCommand = (
-    SnapshotCommand
+    StatusCommand
+    | DoctorCommand
+    | ProjectSummaryCommand
+    | TrackSummaryCommand
+    | DeviceTreeCommand
+    | SelectionCommand
+    | ProjectDiffCommand
+    | ClipNotesCommand
+    | SnapshotCommand
     | ObjectCommand
     | ChildrenCommand
     | SearchCommand
@@ -169,6 +237,14 @@ CliCommand = (
     | ResourceCommand
 )
 ACTION_MODELS: dict[str, type[CliCommand]] = {
+    "status": StatusCommand,
+    "doctor": DoctorCommand,
+    "project_summary": ProjectSummaryCommand,
+    "track_summary": TrackSummaryCommand,
+    "device_tree": DeviceTreeCommand,
+    "selection": SelectionCommand,
+    "project_diff": ProjectDiffCommand,
+    "clip_notes": ClipNotesCommand,
     "snapshot": SnapshotCommand,
     "object": ObjectCommand,
     "children": ChildrenCommand,
@@ -282,6 +358,30 @@ def _validate_command(raw: dict[str, Any]) -> tuple[CliCommand | None, QueryResp
 
 
 def build_query(command: CliCommand) -> QueryRequest:
+    if isinstance(command, (StatusCommand, DoctorCommand)):
+        return StatusQuery(type="status", stale_after_seconds=command.stale_after_seconds)
+    if isinstance(command, ProjectSummaryCommand):
+        return ProjectSummaryQuery(type="project_summary")
+    if isinstance(command, TrackSummaryCommand):
+        return TrackSummaryQuery(type="track_summary", object_id=command.object_id)
+    if isinstance(command, DeviceTreeCommand):
+        return DeviceTreeQuery(
+            type="device_tree",
+            object_id=command.object_id,
+            depth=command.depth,
+            page_size=command.page_size,
+        )
+    if isinstance(command, SelectionCommand):
+        return SelectionQuery(type="selection")
+    if isinstance(command, ProjectDiffCommand):
+        return ProjectDiffQuery(
+            type="project_diff",
+            session_id=command.session_id,
+            after_revision=command.after_revision,
+            limit=command.limit,
+        )
+    if isinstance(command, ClipNotesCommand):
+        return ClipNotesQuery(type="clip_notes", **command.model_dump(exclude={"action"}))
     if isinstance(command, SnapshotCommand):
         return SnapshotQuery(type="snapshot", depth=command.depth, page_size=command.page_size)
     if isinstance(command, ObjectCommand):
@@ -348,9 +448,66 @@ async def _dispatch_query(request: QueryRequest) -> QueryResponse:
 
 
 async def _dispatch_command(command: CliCommand) -> QueryResponse:
+    if isinstance(command, DoctorCommand):
+        return await _doctor(command)
     if isinstance(command, ChangesCommand) and command.after_revision is None:
         return await _dispatch_implicit_changes(command)
     return await _dispatch_query(build_query(command))
+
+
+async def _doctor(command: DoctorCommand) -> QueryResponse:
+    """Run bounded local and authenticated connection diagnostics."""
+    config_directory = _config_directory() or DEFAULT_CONFIG_DIRECTORY
+    config_path = config_directory / "config.json"
+    config = load_or_create_config(_config_directory())
+    executable = config.bridge_executable or shutil.which("ableton-ctrl-bridge")
+    checks: list[JsonValue] = [
+        {
+            "name": "configuration",
+            "status": "ok" if config_path.exists() else "error",
+            "path": str(config_path),
+        },
+        {
+            "name": "configuration_permissions",
+            "status": (
+                "ok"
+                if config_path.exists() and stat.S_IMODE(config_path.stat().st_mode) == 0o600
+                else "error"
+            ),
+            "expected": "0600",
+        },
+        {
+            "name": "bridge_executable",
+            "status": "ok" if executable else "error",
+            "path": executable,
+        },
+    ]
+    status = await BridgeClient(config).request(
+        StatusQuery(type="status", stale_after_seconds=command.stale_after_seconds)
+    )
+    if status.ok and isinstance(status.result, StatusPayload):
+        connection_status = (
+            "ok"
+            if status.result.live_connected and status.result.completeness == "complete"
+            else "warning"
+        )
+        detail = (
+            "connected"
+            if status.result.live_connected
+            else "bridge_running_live_disconnected"
+        )
+    else:
+        connection_status = "error"
+        detail = status.error.code.value if status.error is not None else "unknown"
+    checks.append({"name": "connection", "status": connection_status, "detail": detail})
+    healthy = all(
+        isinstance(item, dict) and item.get("status") == "ok" for item in checks
+    )
+    return QueryResponse(
+        ok=True,
+        completeness="complete",
+        result=DoctorPayload(healthy=healthy, checks=checks),
+    )
 
 
 async def _dispatch_implicit_changes(command: ChangesCommand) -> QueryResponse:
@@ -359,11 +516,10 @@ async def _dispatch_implicit_changes(command: ChangesCommand) -> QueryResponse:
     if not snapshot_response.ok or not isinstance(snapshot_response.result, SnapshotPayload):
         return snapshot_response
 
-    set_name = _set_name_from_snapshot(snapshot_response.result)
-    if set_name is None:
-        return _missing_set_name_response()
-
-    cursor_path = _changes_cursor_path(set_name)
+    cursor_path = _changes_cursor_path(
+        snapshot_response.result.bridge_generation,
+        snapshot_response.result.session_id,
+    )
     after_revision = _read_cursor(cursor_path)
     response = await client.request(
         ChangesQuery(
@@ -378,34 +534,10 @@ async def _dispatch_implicit_changes(command: ChangesCommand) -> QueryResponse:
     return response
 
 
-def _set_name_from_snapshot(snapshot: SnapshotPayload) -> str | None:
-    root = snapshot.root
-    if not isinstance(root, dict):
-        return None
-    properties = root.get("properties")
-    if not isinstance(properties, dict):
-        return None
-    name = properties.get("name")
-    if not isinstance(name, str) or not name.strip():
-        return None
-    return name
-
-
-def _missing_set_name_response() -> QueryResponse:
-    return QueryResponse(
-        ok=False,
-        completeness="unavailable",
-        error=QueryError(
-            code=ErrorCode.STALE_STATE,
-            message="The current Ableton Live Set name could not be determined.",
-            recovery={"action": "save_or_name_current_live_set"},
-        ),
-    )
-
-
-def _changes_cursor_path(set_name: str) -> Path:
+def _changes_cursor_path(bridge_generation: str, session_id: str) -> Path:
     config_directory = _config_directory() or DEFAULT_CONFIG_DIRECTORY
-    return config_directory / "cursors" / "changes" / f"{quote(set_name, safe='')}.json"
+    identity = f"{quote(bridge_generation, safe='')}--{quote(session_id, safe='')}"
+    return config_directory / "cursors" / "changes" / f"{identity}.json"
 
 
 def _read_cursor(path: Path) -> int:

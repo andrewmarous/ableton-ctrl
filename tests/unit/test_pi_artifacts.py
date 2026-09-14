@@ -6,16 +6,34 @@ from pathlib import Path
 import pytest
 
 from ableton_ctrl.pi_installer import (
+    controller_artifact_text,
     extension_artifact_text,
     install_pi_artifacts,
     pi_extension_path,
+    pi_controller_path,
     pi_skill_path,
     run,
     skill_artifact_text,
+    upgrade_pi_artifacts,
 )
 
 
-ACTIONS = ["snapshot", "object", "children", "search", "schema", "changes", "resource"]
+ACTIONS = [
+    "status",
+    "doctor",
+    "snapshot",
+    "object",
+    "children",
+    "search",
+    "schema",
+    "changes",
+    "project_summary",
+    "track_summary",
+    "device_tree",
+    "selection",
+    "project_diff",
+    "resource",
+]
 
 
 def test_extension_registers_exactly_one_flat_ableton_ctrl_tool() -> None:
@@ -69,7 +87,7 @@ def test_skill_documents_actions_operational_constraints_and_recovery() -> None:
         "pagination",
         "revision pinning",
         "persisted cursor",
-        "Set-name ambiguity",
+        "bridge generation",
         "resource",
         "error.recovery",
         "children` rejects values above 200",
@@ -83,8 +101,13 @@ def test_skill_documents_actions_operational_constraints_and_recovery() -> None:
 def test_first_install_creates_global_pi_extension_and_skill(tmp_path: Path) -> None:
     installed = install_pi_artifacts(tmp_path)
 
-    assert installed == [pi_extension_path(tmp_path), pi_skill_path(tmp_path)]
+    assert installed == [
+        pi_extension_path(tmp_path),
+        pi_controller_path(tmp_path),
+        pi_skill_path(tmp_path),
+    ]
     assert pi_extension_path(tmp_path).read_text(encoding="utf-8") == extension_artifact_text()
+    assert pi_controller_path(tmp_path).read_text(encoding="utf-8") == controller_artifact_text()
     assert pi_skill_path(tmp_path).read_text(encoding="utf-8") == skill_artifact_text()
 
 
@@ -123,7 +146,29 @@ def test_installer_refuses_to_overwrite_existing_skill(tmp_path: Path) -> None:
 def test_install_command_rejects_arguments(capsys: pytest.CaptureFixture[str]) -> None:
     assert run(["unexpected"]) == 2
     captured = capsys.readouterr()
-    assert "does not accept arguments" in captured.err
+    assert "Usage:" in captured.err
+
+
+def test_managed_upgrade_backs_up_verified_artifacts(tmp_path: Path) -> None:
+    installed = install_pi_artifacts(tmp_path)
+    upgraded = upgrade_pi_artifacts(tmp_path)
+
+    assert upgraded == installed
+    manifests = list((tmp_path / ".pi" / "agent" / "backups" / "ableton-ctrl").glob("*"))
+    assert len(manifests) == 1
+    backup_root = manifests[0]
+    for target in installed:
+        assert (backup_root / target.relative_to(tmp_path)).read_bytes() == target.read_bytes()
+
+
+def test_managed_upgrade_refuses_user_modified_artifact(tmp_path: Path) -> None:
+    install_pi_artifacts(tmp_path)
+    pi_extension_path(tmp_path).write_text("user change", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="user-modified"):
+        upgrade_pi_artifacts(tmp_path)
+
+    assert pi_extension_path(tmp_path).read_text(encoding="utf-8") == "user change"
 
 
 def test_pyproject_registers_separate_install_console_script() -> None:

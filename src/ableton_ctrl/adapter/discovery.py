@@ -46,6 +46,14 @@ class DiscoverySlice:
     remaining_work: int
     complete: bool
     removed_source_ids: tuple[str, ...] = ()
+    listener_candidates: tuple[ListenerCandidate, ...] = ()
+
+
+@dataclass(frozen=True)
+class ListenerCandidate:
+    source_id: str
+    value: object
+    member: str
 
 
 @dataclass
@@ -54,6 +62,7 @@ class _WorkItem:
     type_name: str
     source_id: str
     path: str
+    depth: int = 0
     member_index: int = 0
     properties: dict[str, JsonValue] = field(default_factory=dict)
     relationships: dict[str, list[str]] = field(default_factory=dict)
@@ -94,6 +103,7 @@ class DiscoveryEngine:
         deadline = self._clock() + budget.max_milliseconds / 1_000
         observations: list[ObjectObservation] = []
         coverage: list[CoverageEntry] = []
+        listeners: list[ListenerCandidate] = []
         processed = 0
 
         while self._work and processed < budget.max_members and self._clock() < deadline:
@@ -107,7 +117,11 @@ class DiscoveryEngine:
             member = members[item.member_index]
             item.member_index += 1
             processed += 1
-            coverage.append(self._observe_member(item, member))
+            entry = self._observe_member(item, member)
+            coverage.append(entry)
+            candidate = self._listener_candidate(item, member, entry)
+            if candidate is not None:
+                listeners.append(candidate)
 
         while self._work and self._work[0].member_index >= len(
             self._members(self._work[0].type_name)
@@ -119,7 +133,15 @@ class DiscoveryEngine:
             coverage=tuple(coverage),
             remaining_work=len(self._work),
             complete=not self._work,
+            listener_candidates=tuple(listeners),
         )
+
+    def resolve_source(self, source_id: str) -> object | None:
+        """Return a previously discovered Live wrapper for a typed read."""
+        for value, _type_name, known_source_id, _path in self._known.values():
+            if known_source_id == source_id:
+                return value
+        return None
 
     def observe_replacement(self, root: object, budget: DiscoveryBudget) -> DiscoverySlice:
         """Fully traverse reachable objects while preserving known identity IDs."""
@@ -172,6 +194,7 @@ class DiscoveryEngine:
                             type_name,
                             source_id,
                             path,
+                            depth=max(0, (len(path.split("/")) - 1) // 2),
                             selected_members=selected,
                         )
                     )
@@ -186,6 +209,11 @@ class DiscoveryEngine:
                 result.remaining_work,
                 result.complete,
                 removed,
+                tuple(
+                    candidate
+                    for candidate in result.listener_candidates
+                    if candidate.source_id not in removed_set
+                ),
             )
         return result
 
@@ -220,6 +248,7 @@ class DiscoveryEngine:
         deadline = self._clock() + budget.max_milliseconds / 1_000
         observations: list[ObjectObservation] = []
         coverage: list[CoverageEntry] = []
+        listeners: list[ListenerCandidate] = []
         processed = 0
         while self._work and processed < budget.max_members and self._clock() < deadline:
             item = self._work[0]
@@ -231,7 +260,11 @@ class DiscoveryEngine:
             member = members[item.member_index]
             item.member_index += 1
             processed += 1
-            coverage.append(self._observe_member(item, member))
+            entry = self._observe_member(item, member)
+            coverage.append(entry)
+            candidate = self._listener_candidate(item, member, entry)
+            if candidate is not None:
+                listeners.append(candidate)
         while self._work and self._work[0].member_index >= len(
             self._members(self._work[0].type_name)
         ):
@@ -241,7 +274,25 @@ class DiscoveryEngine:
             tuple(coverage),
             len(self._work),
             not self._work,
+            listener_candidates=tuple(listeners),
         )
+
+    @staticmethod
+    def _listener_candidate(
+        item: _WorkItem,
+        member: _MemberSpec,
+        entry: CoverageEntry,
+    ) -> ListenerCandidate | None:
+        if entry.status != "supported":
+            return None
+        missing = object()
+        add = inspect.getattr_static(item.value, f"add_{member.live_member}_listener", missing)
+        remove = inspect.getattr_static(
+            item.value, f"remove_{member.live_member}_listener", missing
+        )
+        if add is missing or remove is missing or not callable(add) or not callable(remove):
+            return None
+        return ListenerCandidate(item.source_id, item.value, member.live_member)
 
     def _start(self, root: object) -> None:
         self._work.clear()
@@ -322,6 +373,8 @@ class DiscoveryEngine:
             values = list(value)
 
         result: list[str] = []
+        if values and parent.depth >= _MAX_DEPTH:
+            raise _NormalizationExcluded("Relationship exceeds the maximum depth of 8.")
         for index, child in enumerate(values):
             identity = id(child)
             source_id = self._identity.get(identity)
@@ -347,17 +400,49 @@ class DiscoveryEngine:
                             child_type,
                             source_id,
                             child_path,
+                            depth=parent.depth + 1,
                             selected_members=selected,
                         )
                     )
             elif self._replacement_active and identity not in self._replacement_scheduled:
-                child, child_type, known_source_id, child_path = self._known[identity]
+                child, child_type, known_source_id, old_path = self._known[identity]
+                suffix = str(index) if spec.cardinality == "collection" else "0"
+                candidate_path = f"{parent.path}/{spec.name}/{suffix}"
+                child_path = old_path
+                if self._owns_path(identity, spec.name, old_path):
+                    child_path = candidate_path
+                    self._known[identity] = (child, child_type, known_source_id, child_path)
+                    self._update_queued_path(known_source_id, child_path)
                 self._replacement_scheduled.add(identity)
-                self._work.append(_WorkItem(child, child_type, known_source_id, child_path))
+                self._work.append(
+                    _WorkItem(
+                        child,
+                        child_type,
+                        known_source_id,
+                        child_path,
+                        depth=parent.depth + 1,
+                    )
+                )
+            else:
+                child, child_type, known_source_id, old_path = self._known[identity]
+                suffix = str(index) if spec.cardinality == "collection" else "0"
+                new_path = f"{parent.path}/{spec.name}/{suffix}"
+                if old_path != new_path and self._owns_path(identity, spec.name, old_path):
+                    self._known[identity] = (child, child_type, known_source_id, new_path)
+                    self._update_queued_path(known_source_id, new_path)
             if self._replacement_active:
                 self._replacement_scheduled.add(identity)
             result.append(source_id)
         return result
+
+    def _update_queued_path(self, source_id: str, path: str) -> None:
+        for work_item in self._work:
+            if work_item.source_id == source_id:
+                work_item.path = path
+
+    def _owns_path(self, identity: int, relationship: str, path: str) -> bool:
+        parts = path.rsplit("/", 2)
+        return identity != self._root_identity and len(parts) == 3 and parts[-2] == relationship
 
     def _resolve_type(self, value: object, fallback: str) -> str:
         class_name = type(value).__name__

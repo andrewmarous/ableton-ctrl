@@ -3,21 +3,34 @@
 from __future__ import annotations
 
 import asyncio
+import argparse
 import hashlib
 import hmac
 import ipaddress
 import json
 import logging
+import os
+import signal
+from uuid import uuid4
+from pathlib import Path
 from typing import Any, Literal, Mapping
 
 from pydantic import TypeAdapter, ValidationError
 
 from ableton_ctrl.bridge.store import GraphStore, StoreError
+from ableton_ctrl.bridge.store import SchemaMemberDefinition
+from ableton_ctrl.adapter.manifest import LIVE_12_MANIFEST
 from ableton_ctrl.config import BridgeConfig, load_or_create_config
 from ableton_ctrl.contracts import (
     ChangesPayload,
     ChildrenPayload,
+    DeviceTreePayload,
+    DeviceTreeQuery,
     ObjectPayload,
+    ProjectSummaryPayload,
+    ProjectSummaryQuery,
+    ProjectDiffPayload,
+    ProjectDiffQuery,
     QueryPayload,
     QueryRequest,
     QueryResponse,
@@ -26,6 +39,12 @@ from ableton_ctrl.contracts import (
     SnapshotPayload,
     StatusPayload,
     UpdateBatch,
+    SelectionPayload,
+    SelectionQuery,
+    TrackSummaryPayload,
+    TrackSummaryQuery,
+    ClipNotesPayload,
+    ClipNotesQuery,
 )
 
 FRAME_LIMIT = 1_048_576
@@ -35,6 +54,33 @@ TRANSACTION_OBSERVATION_LIMIT = 10_000
 TRANSACTION_REMOVAL_LIMIT = 10_000
 _QUERY_ADAPTER: TypeAdapter[QueryRequest] = TypeAdapter(QueryRequest)
 _LOGGER = logging.getLogger(__name__)
+
+
+def _live_12_schema_metadata() -> dict[str, dict[str, SchemaMemberDefinition]]:
+    result: dict[str, dict[str, SchemaMemberDefinition]] = {}
+    for type_name, spec in LIVE_12_MANIFEST.items():
+        members: dict[str, SchemaMemberDefinition] = {}
+        for property_member in spec.properties:
+            members[property_member.name] = SchemaMemberDefinition(
+                kind="property",
+                manifest_metadata={
+                    "description": property_member.description,
+                    "unit": property_member.unit,
+                    "poll_class": property_member.poll_class,
+                    "exclusion_reason": property_member.exclusion_reason,
+                },
+            )
+        for relationship_member in spec.relationships:
+            members[relationship_member.name] = SchemaMemberDefinition(
+                kind="relationship",
+                manifest_metadata={
+                    "description": relationship_member.description,
+                    "target_type": relationship_member.target_type,
+                    "cardinality": relationship_member.cardinality,
+                },
+            )
+        result[type_name] = members
+    return result
 
 
 class BridgeServer:
@@ -48,6 +94,7 @@ class BridgeServer:
         store: GraphStore | None = None,
         *,
         config: BridgeConfig | None = None,
+        instance_id: str | None = None,
     ) -> None:
         if isinstance(host, BridgeConfig):
             if config is not None:
@@ -77,10 +124,14 @@ class BridgeServer:
         self._configured_port = port
         self._secret = secret
         self.store = store
+        self.instance_id = instance_id
         self._server: asyncio.Server | None = None
+        self._connections: set[asyncio.StreamWriter] = set()
         self._adapter_generation = 0
         self._active_adapter_generation: int | None = None
         self._update_transactions: dict[int, tuple[str, int, dict[str, Any], int, int]] = {}
+        self._active_adapter_writer: asyncio.StreamWriter | None = None
+        self._read_requests: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
     @property
     def port(self) -> int:
@@ -100,11 +151,28 @@ class BridgeServer:
         self._log("bridge_started")
 
     async def close(self) -> None:
-        if self._server is None:
-            return
-        self._server.close()
-        await self._server.wait_closed()
+        server = self._server
         self._server = None
+        if server is not None:
+            server.close()
+        writers = tuple(self._connections)
+        for writer in writers:
+            writer.close()
+        if server is not None:
+            try:
+                await asyncio.wait_for(server.wait_closed(), timeout=1.0)
+            except TimeoutError:
+                self._log("listener_cleanup_timeout")
+        if writers:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(
+                        *(writer.wait_closed() for writer in writers), return_exceptions=True
+                    ),
+                    timeout=1.0,
+                )
+            except TimeoutError:
+                self._log("connection_cleanup_timeout")
         self._log("bridge_stopped")
 
     async def serve_forever(self) -> None:
@@ -118,6 +186,7 @@ class BridgeServer:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
+        self._connections.add(writer)
         role: Literal["adapter", "query"] | None = None
         adapter_session: str | None = None
         adapter_generation: int | None = None
@@ -146,6 +215,7 @@ class BridgeServer:
                 self._adapter_generation += 1
                 adapter_generation = self._adapter_generation
                 self._active_adapter_generation = adapter_generation
+                self._active_adapter_writer = writer
                 await self._send(writer, {"protocol_version": 1, "ok": True})
             elif message is not None:
                 if not await self._dispatch_query(message, writer):
@@ -170,11 +240,18 @@ class BridgeServer:
         except ConnectionError:
             pass
         finally:
+            self._connections.discard(writer)
             if (
                 adapter_generation is not None
                 and self._active_adapter_generation == adapter_generation
             ):
                 self._active_adapter_generation = None
+                if self._active_adapter_writer is writer:
+                    self._active_adapter_writer = None
+                for future in self._read_requests.values():
+                    if not future.done():
+                        future.set_exception(ConnectionError("adapter disconnected"))
+                self._read_requests.clear()
                 self._update_transactions.pop(adapter_generation, None)
                 self.store.mark_offline()
                 self._log(
@@ -281,6 +358,13 @@ class BridgeServer:
             await self._send_error(writer, "invalid_request")
             return False
         kind = frame.get("kind")
+        if kind == "read_response":
+            request_id = frame.get("request_id")
+            future = self._read_requests.pop(request_id, None) if isinstance(request_id, str) else None
+            if future is not None and not future.done():
+                future.set_result(frame)
+            await self._send(writer, {"protocol_version": 1, "ok": True})
+            return True
         if kind == "disconnect":
             await self._send(writer, {"protocol_version": 1, "ok": True})
             return False
@@ -390,6 +474,8 @@ class BridgeServer:
             frame = frame["request"]
         try:
             request = _QUERY_ADAPTER.validate_python(frame)
+            if isinstance(request, ClipNotesQuery):
+                return await self._dispatch_clip_notes(request, writer)
             result = self._execute_query(request)
         except ValidationError:
             self._audit_failure("invalid_request", role="query")
@@ -414,6 +500,32 @@ class BridgeServer:
         )
         return True
 
+    async def _dispatch_clip_notes(self, request: ClipNotesQuery, writer: asyncio.StreamWriter) -> bool:
+        try:
+            source_id, _ = self.store.read_target(request.object_id, request.session_id)
+            adapter = self._active_adapter_writer
+            if adapter is None:
+                raise StoreError("live_offline", "adapter is offline")
+            request_id = uuid4().hex
+            future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+            self._read_requests[request_id] = future
+            await self._send(adapter, {"kind": "read_request", "request_id": request_id, "session_id": request.session_id, "source_id": source_id, **request.model_dump(exclude={"type", "session_id", "object_id"})})
+            frame = await asyncio.wait_for(future, timeout=request.deadline_ms / 1000)
+            if frame.get("ok") is not True or not isinstance(frame.get("notes"), list):
+                raise StoreError("read_failed", "clip note read failed")
+            status = self.store.status()
+            metadata = {key: value for key, value in status.model_dump(exclude_none=True).items() if key in {"live_version", "edition", "edition_source", "compatibility", "session_id", "bridge_generation", "bridge_revision", "captured_at", "cache_age_seconds", "completeness"}}
+            if frame.get("truncated") is True:
+                metadata["completeness"] = "partial"
+            payload = ClipNotesPayload(notes=frame["notes"], truncated=bool(frame.get("truncated", False)), requested_range={"from_beat": request.from_beat, "beat_span": request.beat_span, "from_pitch": request.from_pitch, "pitch_span": request.pitch_span}, **metadata)
+            await self._send(writer, QueryResponse(ok=True, result=payload, **metadata).model_dump(mode="json", exclude_none=True))
+            return True
+        except (StoreError, TimeoutError, asyncio.TimeoutError, ConnectionError):
+            await self._send_error(writer, "read_failed")
+            return True
+        finally:
+            self._read_requests.pop(locals().get("request_id", ""), None)
+
     @staticmethod
     def _query_response(request: QueryRequest, result: Any) -> QueryResponse:
         raw = result.model_dump(mode="json")
@@ -421,7 +533,11 @@ class BridgeServer:
             key: raw[key]
             for key in (
                 "live_version",
+                "edition",
+                "edition_source",
+                "compatibility",
                 "session_id",
+                "bridge_generation",
                 "bridge_revision",
                 "captured_at",
                 "cache_age_seconds",
@@ -472,6 +588,16 @@ class BridgeServer:
                 next_revision=raw["next_revision"],
                 **metadata,
             )
+        elif request.type == "project_summary":
+            payload = ProjectSummaryPayload(summary=raw["value"], **metadata)
+        elif request.type == "track_summary":
+            payload = TrackSummaryPayload(summary=raw["value"], **metadata)
+        elif request.type == "device_tree":
+            payload = DeviceTreePayload(tree=raw["value"], **metadata)
+        elif request.type == "selection":
+            payload = SelectionPayload(selection=raw["value"], **metadata)
+        elif request.type == "project_diff":
+            payload = ProjectDiffPayload(diff=raw["value"], **metadata)
         else:
             raise ValueError("resource queries are handled by the CLI before bridge dispatch")
         return QueryResponse(ok=True, result=payload, **metadata)
@@ -506,6 +632,18 @@ class BridgeServer:
                 request.session_id,
                 request.after_revision,
                 request.limit,
+            )
+        if isinstance(request, ProjectSummaryQuery):
+            return self.store.project_summary()
+        if isinstance(request, TrackSummaryQuery):
+            return self.store.track_summary(request.object_id)
+        if isinstance(request, DeviceTreeQuery):
+            return self.store.device_tree(request.object_id, request.depth, request.page_size)
+        if isinstance(request, SelectionQuery):
+            return self.store.selection()
+        if isinstance(request, ProjectDiffQuery):
+            return self.store.project_diff(
+                request.session_id, request.after_revision, request.limit
             )
         raise ValueError("resource queries are handled by the CLI before bridge dispatch")
 
@@ -587,13 +725,74 @@ class BridgeServer:
         )
 
 
-def main() -> None:
-    """Run the bridge until the process is interrupted."""
-    logging.basicConfig(level=logging.INFO)
-    config = load_or_create_config()
-    server = BridgeServer(config=config, store=GraphStore())
+async def _wait_for_supervisor(fd: int) -> None:
+    """Return when the inherited parent-liveness pipe reaches EOF."""
+    loop = asyncio.get_running_loop()
+    finished: asyncio.Future[None] = loop.create_future()
+
+    def readable() -> None:
+        try:
+            data = os.read(fd, 1)
+        except OSError:
+            data = b""
+        if not data and not finished.done():
+            finished.set_result(None)
+
+    loop.add_reader(fd, readable)
     try:
-        asyncio.run(server.serve_forever())
+        await finished
+    finally:
+        loop.remove_reader(fd)
+        os.close(fd)
+
+
+async def _run_bridge(config: BridgeConfig, instance_id: str | None, supervision_fd: int | None) -> None:
+    server = BridgeServer(
+        config=config,
+        store=GraphStore(schema_metadata=_live_12_schema_metadata()),
+        instance_id=instance_id,
+    )
+    await server.start()
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(signum, stop.set)
+        except NotImplementedError:
+            pass
+    tasks: list[asyncio.Task[Any]] = [asyncio.create_task(stop.wait())]
+    if supervision_fd is not None:
+        tasks.append(asyncio.create_task(_wait_for_supervisor(supervision_fd)))
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await server.close()
+
+
+def main() -> None:
+    """Run the bridge until signalled or its supervising parent disappears."""
+    logging.basicConfig(level=logging.INFO)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--instance-id")
+    parser.add_argument("--supervision-fd", type=int)
+    arguments, _unknown = parser.parse_known_args()
+    configured_directory = os.environ.get("ABLETON_CTRL_CONFIG_DIR")
+    config = (
+        load_or_create_config(Path(configured_directory))
+        if configured_directory
+        else load_or_create_config()
+    )
+    try:
+        if arguments.instance_id is None and arguments.supervision_fd is None:
+            server = BridgeServer(
+                config=config,
+                store=GraphStore(schema_metadata=_live_12_schema_metadata()),
+            )
+            asyncio.run(server.serve_forever())
+        else:
+            asyncio.run(_run_bridge(config, arguments.instance_id, arguments.supervision_fd))
     except KeyboardInterrupt:
         pass
 

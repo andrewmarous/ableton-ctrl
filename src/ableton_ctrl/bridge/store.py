@@ -32,7 +32,11 @@ class StoreModel(BaseModel):
 class BindingMetadata(StoreModel):
     protocol_version: Literal[1] = 1
     live_version: str
+    edition: str = "unknown"
+    edition_source: Literal["detection", "configuration", "unavailable"] = "unavailable"
+    compatibility: Literal["tested", "unverified", "unsupported"] = "unverified"
     session_id: str
+    bridge_generation: str = Field(default="unknown", min_length=1)
     bridge_revision: int = Field(ge=0)
     captured_at: datetime
     cache_age_seconds: float = Field(ge=0)
@@ -66,7 +70,11 @@ class StatusResult(StoreModel):
     state: Literal["live_offline", "live", "stale_state"]
     live_connected: bool
     live_version: str | None
+    edition: str | None = None
+    edition_source: Literal["detection", "configuration", "unavailable"] | None = None
+    compatibility: Literal["tested", "unverified", "unsupported"] | None = None
     session_id: str | None
+    bridge_generation: str = Field(min_length=1)
     bridge_revision: int
     captured_at: datetime | None
     cache_age_seconds: float | None
@@ -175,6 +183,10 @@ class ChangesResult(BindingMetadata):
         return self.bridge_revision
 
 
+class SummaryResult(BindingMetadata):
+    value: JsonValue
+
+
 @dataclass
 class _Node:
     object_id: str
@@ -194,6 +206,9 @@ class _Revision:
     source_to_id: dict[str, str]
     changes: ChangeSet
     live_version: str
+    edition: str
+    edition_source: Literal["detection", "configuration", "unavailable"]
+    compatibility: Literal["tested", "unverified", "unsupported"]
     captured_at: datetime
     discovery_complete: bool
 
@@ -225,14 +240,19 @@ class GraphStore:
         history_limit: int = 100,
         clock: Clock | None = None,
         schema_metadata: Mapping[str, Mapping[str, SchemaMemberDefinition]] | None = None,
+        bridge_generation: str | None = None,
     ) -> None:
         if history_limit < 1:
             raise StoreError("invalid_bounds", "history_limit must be at least 1")
         self._lock = RLock()
+        self._bridge_generation = bridge_generation or str(uuid4())
         self._history_limit = history_limit
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._session_id: str | None = None
         self._live_version: str | None = None
+        self._edition: str | None = None
+        self._edition_source: Literal["detection", "configuration", "unavailable"] | None = None
+        self._compatibility: Literal["tested", "unverified", "unsupported"] | None = None
         self._captured_at: datetime | None = None
         self._live_connected = False
         self._revision = 0
@@ -309,7 +329,7 @@ class GraphStore:
             for node in base_graph.values():
                 for relationship, targets in node.relationships.items():
                     missing = set(targets) - available_sources
-                    if missing:
+                    if missing and batch.discovery_complete:
                         missing_text = ", ".join(sorted(missing))
                         raise StoreError(
                             "invalid_relationship",
@@ -327,6 +347,9 @@ class GraphStore:
                 dict(base_ids),
                 change_set,
                 batch.live_version,
+                batch.edition,
+                batch.edition_source,
+                batch.compatibility,
                 batch.captured_at,
                 batch.discovery_complete,
             )
@@ -338,6 +361,9 @@ class GraphStore:
                 self._history.clear()
             self._session_id = batch.session_id
             self._live_version = batch.live_version
+            self._edition = batch.edition
+            self._edition_source = batch.edition_source
+            self._compatibility = batch.compatibility
             self._captured_at = batch.captured_at
             if batch.runtime_outcome is not None:
                 self._runtime_outcome = batch.runtime_outcome
@@ -366,7 +392,11 @@ class GraphStore:
                     state="live_offline",
                     live_connected=False,
                     live_version=None,
+                    edition=None,
+                    edition_source=None,
+                    compatibility=None,
                     session_id=None,
+                    bridge_generation=self._bridge_generation,
                     bridge_revision=0,
                     captured_at=None,
                     cache_age_seconds=None,
@@ -384,7 +414,11 @@ class GraphStore:
                 state=state,
                 live_connected=self._live_connected,
                 live_version=self._live_version,
+                edition=self._edition,
+                edition_source=self._edition_source,
+                compatibility=self._compatibility,
                 session_id=self._session_id,
+                bridge_generation=self._bridge_generation,
                 bridge_revision=self._revision,
                 captured_at=self._captured_at,
                 cache_age_seconds=age,
@@ -392,6 +426,19 @@ class GraphStore:
                 runtime_outcome=self._runtime_outcome,
                 runtime_action=self._runtime_action,
             )
+
+    def read_target(self, object_id: str, session_id: str) -> tuple[str, str]:
+        with self._lock:
+            self._require_online()
+            if self._session_id != session_id:
+                raise StoreError("session_changed", "session changed")
+            revision = self._current_snapshot()
+            node = revision.graph.get(object_id)
+            if node is None:
+                raise StoreError("stale_cursor", "object is no longer available")
+            if node.type != "Clip":
+                raise StoreError("unsupported_property", "object is not a MIDI clip")
+            return node.source_id, node.type
 
     def snapshot(self, depth: int = 1, page_size: int = 20) -> SnapshotResult:
         self._bounds("depth", depth, 0, 8)
@@ -469,10 +516,13 @@ class GraphStore:
             if relationship not in node.relationships:
                 raise StoreError("not_found", f"unknown relationship {relationship}")
             target_ids = node.relationships[relationship]
-            items = [
-                self._reference(snapshot.graph[snapshot.source_to_id[source_id]])
-                for source_id in target_ids[offset : offset + limit]
-            ]
+            page_sources = target_ids[offset : offset + limit]
+            items = []
+            for source_id in page_sources:
+                target_id = snapshot.source_to_id.get(source_id)
+                target = snapshot.graph.get(target_id) if target_id else None
+                if target is not None:
+                    items.append(self._reference(target))
             total = len(target_ids)
             continuation = (
                 self._cursor(snapshot.number, offset + limit) if offset + limit < total else None
@@ -485,7 +535,9 @@ class GraphStore:
                 continuation=continuation,
                 **self._metadata(
                     snapshot,
-                    "partial" if continuation is not None else "complete",
+                    "partial"
+                    if continuation is not None or len(items) != len(page_sources)
+                    else "complete",
                 ),
             )
 
@@ -632,6 +684,174 @@ class GraphStore:
                 ),
             )
 
+    def project_summary(self) -> SummaryResult:
+        with self._lock:
+            revision = self._current_snapshot()
+            root = self._find_root(revision.graph)
+            tracks = self._related_nodes(revision, root, "tracks")
+            returns = root.relationships.get("return_tracks", [])
+            clips = [
+                clip
+                for track in tracks
+                for clip in self._related_nodes(revision, track, "arrangement_clips")
+            ]
+            ends = [
+                float(raw_end)
+                for clip in clips
+                if isinstance((raw_end := clip.properties.get("end_time")), (int, float))
+                and not isinstance(raw_end, bool)
+            ]
+            value: JsonValue = {
+                "name": root.properties.get("name"),
+                "tempo": root.properties.get("tempo"),
+                "track_count": len(root.relationships.get("tracks", [])),
+                "group_count": sum(track.properties.get("is_foldable") is True for track in tracks),
+                "return_track_count": len(returns),
+                "arrangement_clip_count": len(clips),
+                "observed_arrangement_end": max(ends) if ends else None,
+                "count_kind": "exact" if revision.discovery_complete else "observed",
+            }
+            return SummaryResult(value=value, **self._metadata(revision, "complete"))
+
+    def project_diff(self, session_id: str, after_revision: int, limit: int) -> SummaryResult:
+        changes = self.get_changes(session_id, after_revision, limit)
+        lines: list[JsonValue] = []
+        for change_set in changes.changes:
+            for change in change_set.changes:
+                members = f" ({', '.join(change.members)})" if change.members else ""
+                lines.append(
+                    f"Revision {change_set.revision}: {change.kind} {change.source_id}{members}"
+                )
+        value: JsonValue = {
+            "after_revision": after_revision,
+            "next_revision": changes.next_revision,
+            "lines": lines,
+            "has_more": changes.next_revision < changes.bridge_revision,
+        }
+        return SummaryResult(
+            value=value,
+            live_version=changes.live_version,
+            edition=changes.edition,
+            edition_source=changes.edition_source,
+            compatibility=changes.compatibility,
+            session_id=changes.session_id,
+            bridge_generation=changes.bridge_generation,
+            bridge_revision=changes.bridge_revision,
+            captured_at=changes.captured_at,
+            cache_age_seconds=changes.cache_age_seconds,
+            completeness=changes.completeness,
+        )
+
+    def track_summary(self, object_id: str) -> SummaryResult:
+        with self._lock:
+            self._check_invalid_object(object_id)
+            revision = self._current_snapshot()
+            node = revision.graph.get(object_id)
+            if node is None or node.type != "Track":
+                raise StoreError("not_found", "track object was not found")
+            mixers = self._related_nodes(revision, node, "mixer_device")
+            mixer = mixers[0] if mixers else None
+            value: JsonValue = {
+                "object_id": object_id,
+                "name": node.properties.get("name"),
+                "mixer_state": {
+                    key: node.properties[key]
+                    for key in ("mute", "solo", "arm", "is_frozen")
+                    if key in node.properties
+                },
+                "routing": {
+                    key: node.properties[key]
+                    for key in ("current_input_routing", "current_output_routing")
+                    if key in node.properties
+                },
+                "session_clip_slots": len(node.relationships.get("clip_slots", [])),
+                "arrangement_clips": len(node.relationships.get("arrangement_clips", [])),
+                "devices": len(node.relationships.get("devices", [])),
+                "sends": len(mixer.relationships.get("sends", [])) if mixer else None,
+                "count_kind": "exact" if revision.discovery_complete else "observed",
+            }
+            return SummaryResult(value=value, **self._metadata(revision, "complete"))
+
+    def selection(self) -> SummaryResult:
+        with self._lock:
+            revision = self._current_snapshot()
+            root = self._find_root(revision.graph)
+            views = self._related_nodes(revision, root, "view")
+            view = views[0] if views else None
+            value: dict[str, JsonValue] = {}
+            for name in ("selected_track", "selected_scene", "selected_device", "detail_clip"):
+                if view is None or name not in view.relationships:
+                    value[name] = {"availability": "unknown"}
+                    continue
+                targets = self._related_nodes(revision, view, name)
+                value[name] = self._node_reference(targets[0]) if targets else None
+            return SummaryResult(value=value, **self._metadata(revision, "complete"))
+
+    def device_tree(self, object_id: str, depth: int, page_size: int) -> SummaryResult:
+        self._bounds("depth", depth, 0, 8)
+        self._bounds("page_size", page_size, 1, 200)
+        with self._lock:
+            self._check_invalid_object(object_id)
+            revision = self._current_snapshot()
+            node = revision.graph.get(object_id)
+            if node is None or node.type not in {"Device", "Chain", "DrumPad"}:
+                raise StoreError("not_found", "device-tree root was not found")
+            remaining, partial = [page_size], [False]
+            value = self._device_tree_node(revision, node, depth, remaining, set(), partial)
+            return SummaryResult(
+                value=value,
+                **self._metadata(revision, "partial" if partial[0] else "complete"),
+            )
+
+    @staticmethod
+    def _related_nodes(revision: _Revision, node: _Node, relationship: str) -> list[_Node]:
+        result: list[_Node] = []
+        for source_id in node.relationships.get(relationship, []):
+            object_id = revision.source_to_id.get(source_id)
+            child = revision.graph.get(object_id) if object_id else None
+            if child is not None:
+                result.append(child)
+        return result
+
+    @staticmethod
+    def _node_reference(node: _Node) -> JsonValue:
+        return {"object_id": node.object_id, "type": node.type, "path": node.path}
+
+    def _device_tree_node(
+        self,
+        revision: _Revision,
+        node: _Node,
+        depth: int,
+        remaining: list[int],
+        visited: set[str],
+        partial: list[bool],
+    ) -> JsonValue:
+        if node.object_id in visited:
+            return {"object_id": node.object_id, "type": node.type, "cycle": True}
+        visited.add(node.object_id)
+        children: list[JsonValue] = []
+        has_children = any(node.relationships.get(name) for name in ("devices", "chains", "drum_pads"))
+        if depth == 0 and has_children:
+            partial[0] = True
+        elif depth > 0:
+            for relationship in ("devices", "chains", "drum_pads"):
+                for child in self._related_nodes(revision, node, relationship):
+                    if remaining[0] == 0:
+                        partial[0] = True
+                        break
+                    remaining[0] -= 1
+                    children.append(
+                        self._device_tree_node(
+                            revision, child, depth - 1, remaining, visited, partial
+                        )
+                    )
+        return {
+            "object_id": node.object_id,
+            "type": node.type,
+            "name": node.properties.get("name"),
+            "children": children,
+        }
+
     @staticmethod
     def _node_from_observation(
         object_id: str,
@@ -764,7 +984,11 @@ class GraphStore:
         return {
             "protocol_version": 1,
             "live_version": revision.live_version,
+            "edition": revision.edition,
+            "edition_source": revision.edition_source,
+            "compatibility": revision.compatibility,
             "session_id": self._session_id,
+            "bridge_generation": self._bridge_generation,
             "bridge_revision": revision.number,
             "captured_at": revision.captured_at,
             "cache_age_seconds": max(
@@ -806,9 +1030,12 @@ class GraphStore:
         source_index = {item.source_id: item for item in graph.values()}
         for name, target_sources in node.relationships.items():
             visible = target_sources[:page_size]
+            visible_nodes = [source_index[source] for source in visible if source in source_index]
+            if len(visible_nodes) != len(visible):
+                partial[0] = True
             if depth == 0:
                 items: list[ObjectReference | ObjectView] = [
-                    self._reference(source_index[source]) for source in visible
+                    self._reference(target) for target in visible_nodes
                 ]
                 continuation = self._cursor(revision, len(visible)) if target_sources else None
                 if target_sources:
@@ -816,14 +1043,14 @@ class GraphStore:
             else:
                 items = [
                     self._expand(
-                        source_index[source],
+                        target,
                         graph,
                         depth - 1,
                         page_size,
                         partial,
                         revision,
                     )
-                    for source in visible
+                    for target in visible_nodes
                 ]
                 continuation = (
                     self._cursor(revision, page_size) if len(target_sources) > page_size else None

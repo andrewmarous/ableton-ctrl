@@ -53,5 +53,6 @@ module = [
     "tests.unit.test_contracts",
     "tests.unit.test_discovery",
     "tests.unit.test_live_smoke",
+    "tests.unit.test_store",
 ]
 ignore_errors = true

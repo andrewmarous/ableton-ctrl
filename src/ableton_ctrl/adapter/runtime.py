@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import queue
 import socket
 import threading
@@ -10,10 +11,10 @@ import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 from uuid import uuid4
 
-from ableton_ctrl.adapter.discovery import DiscoveryBudget, DiscoveryEngine
+from ableton_ctrl.adapter.discovery import DiscoveryBudget, DiscoveryEngine, ListenerCandidate
 from ableton_ctrl.adapter.manifest import TypeSpec
 
 _FRAME_LIMIT = 1_048_576
@@ -21,6 +22,7 @@ _TRANSACTION_PART_LIMIT = 128
 _TRANSACTION_BYTE_LIMIT = 64 * _FRAME_LIMIT
 _TRANSACTION_OBSERVATION_LIMIT = 10_000
 _TRANSACTION_REMOVAL_LIMIT = 10_000
+_INCREMENTAL_PUBLICATION_SIZE = 200
 
 
 class _TerminalPublicationError(ValueError):
@@ -66,7 +68,9 @@ class AdapterRuntime:
         session_id: str | None = None,
         discovery: DiscoveryEngine | None = None,
         live_version: str = "12.4.2",
-        edition: str = "Intro",
+        edition: str = "unknown",
+        edition_source: str = "unavailable",
+        compatibility: str = "unverified",
         max_pending: int = 10_000,
         max_members: int = 100,
         max_milliseconds: float = 4.0,
@@ -80,6 +84,8 @@ class AdapterRuntime:
         self.session_id = session_id or str(uuid4())
         self._live_version = live_version
         self._edition = edition
+        self._edition_source = edition_source
+        self._compatibility = compatibility
         self._max_pending = max_pending
         self._max_members = max_members
         self._max_milliseconds = max_milliseconds
@@ -88,8 +94,10 @@ class AdapterRuntime:
         self._evidence = evidence
         self._pending: OrderedDict[str, dict[str, object]] = OrderedDict()
         self._dirty: set[tuple[int, str]] = set()
-        self._listener_requests: deque[tuple[object, str, object]] = deque()
-        self._listeners: list[tuple[object, str, object]] = []
+        self._listener_requests: deque[tuple[str, object, str, object]] = deque()
+        self._listener_request_keys: set[tuple[str, str]] = set()
+        self._listener_removals: deque[tuple[str, str]] = deque()
+        self._listeners: dict[tuple[str, str], tuple[object, object]] = {}
         self._disconnect_requested = False
         self._disconnected = False
         self._next_due = {name: 0.0 for name in self._CADENCES}
@@ -109,8 +117,12 @@ class AdapterRuntime:
         self._resync_inflight: int | None = None
         self._pending_replace_graph = False
         self._pending_resync_generation: int | None = None
+        self._read_requests: deque[dict[str, object]] = deque()
+        self._replacement_publication_started = False
         self._terminal_capacity_error = False
         self._terminal_status_pending = False
+        self._was_transport_connected = False
+        self._active_connection_seen = False
 
     @property
     def dirty_count(self) -> int:
@@ -130,14 +142,21 @@ class AdapterRuntime:
             return "reduce_observation_size_or_capacity"
         return None
 
-    def register_listener(self, live_object: object, member: str) -> None:
+    def register_listener(
+        self, live_object: object, member: str, *, source_id: str | None = None
+    ) -> None:
         """Queue registration; no Live API is touched before the next tick."""
-        key = (id(live_object), member)
+        listener_source = source_id or f"object:{id(live_object)}"
+        listener_key = (listener_source, member)
+        if listener_key in self._listeners or listener_key in self._listener_request_keys:
+            return
+        dirty_key = (id(live_object), member)
 
         def callback() -> None:
-            self._dirty.add(key)
+            self._dirty.add(dirty_key)
 
-        self._listener_requests.append((live_object, member, callback))
+        self._listener_requests.append((listener_source, live_object, member, callback))
+        self._listener_request_keys.add(listener_key)
 
     def tick(self, now: float) -> None:
         started = self._timing_clock()
@@ -161,12 +180,25 @@ class AdapterRuntime:
             return
         self._connect_if_due(now)
         remaining -= 1
+        if not self._transport.connected:
+            if self._was_transport_connected:
+                self._enter_idle()
+            self._was_transport_connected = False
+            return
+        if not self._was_transport_connected:
+            if self._active_connection_seen:
+                self._prepare_fresh_reconnect()
+            self._active_connection_seen = True
+            self._was_transport_connected = True
         if remaining <= 0 or self._clock() >= deadline:
             return
         inbound = self._transport.receive(remaining)
         for message in inbound:
             self.handle_inbound(message)
         remaining -= len(inbound)
+        while self._read_requests and remaining > 0 and self._clock() < deadline:
+            self._serve_read_request(self._read_requests.popleft(), deadline)
+            remaining -= 1
         if self._terminal_capacity_error:
             self._due_classes.discard("structural")
             if self._terminal_status_pending:
@@ -218,10 +250,19 @@ class AdapterRuntime:
                     item for item in self._result_observations if item.source_id not in removed
                 )
             self._last_complete = result.complete
-            if self._force_full_discovery and result.complete:
-                self._force_full_discovery = False
+            if self._force_full_discovery and not self._replacement_publication_started:
                 self._pending_replace_graph = True
                 self._pending_resync_generation = self._resync_generation
+                self._replacement_publication_started = True
+            for candidate in result.listener_candidates:
+                self._queue_discovered_listener(candidate)
+            if result.removed_source_ids:
+                removed_sources = set(result.removed_source_ids)
+                for key in tuple(self._listeners):
+                    if key[0] in removed_sources:
+                        self._listener_removals.append(key)
+            if self._force_full_discovery and result.complete:
+                self._force_full_discovery = False
             if self._evidence is not None:
                 self._evidence.record_coverage(result.coverage)
         while self._result_observations and self._clock() < deadline:
@@ -233,15 +274,43 @@ class AdapterRuntime:
         while len(self._pending) > self._max_pending and self._clock() < deadline:
             self._pending.popitem(last=False)
             self._partial_result = True
-        if self._clock() < deadline and not self._discovery_pending:
+        if self._clock() < deadline and (
+            not self._discovery_pending or len(self._pending) >= _INCREMENTAL_PUBLICATION_SIZE
+        ):
             self._flush()
 
     def disconnect(self) -> None:
         """Request cleanup on the next main-thread tick."""
         self._disconnect_requested = True
 
+    def _enter_idle(self) -> None:
+        """Discard graph work that cannot be current after a disconnected interval."""
+        self._pending.clear()
+        self._pending_removals.clear()
+        self._result_observations.clear()
+        self._dirty.clear()
+        self._due_classes.clear()
+        self._discovery_pending = False
+        self._pending_replace_graph = False
+        self._pending_resync_generation = None
+        self._replacement_publication_started = False
+
+    def _prepare_fresh_reconnect(self) -> None:
+        self._enter_idle()
+        self._force_full_discovery = True
+        self._replacement_publication_started = False
+        self._resync_generation += 1
+        self._due_classes.add("structural")
+
     def handle_inbound(self, message: dict[str, object]) -> bool:
         kind = message.get("type")
+        if kind == "read_request":
+            if len(self._read_requests) >= 32:
+                return False
+            message = dict(message)
+            message["_received_at"] = self._clock()
+            self._read_requests.append(message)
+            return True
         if kind == "handshake_ack":
             return message.get("ok") is True
         if kind == "transport_error":
@@ -252,6 +321,7 @@ class AdapterRuntime:
                     self._terminal_status_pending = True
                     return True
                 self._force_full_discovery = True
+                self._replacement_publication_started = False
                 self._resync_generation += 1
                 self._due_classes.add("structural")
                 return True
@@ -271,17 +341,104 @@ class AdapterRuntime:
             return isinstance(message.get("bridge_revision"), int)
         return False
 
+    def _serve_read_request(self, request: dict[str, object], deadline: float) -> None:
+        request_id = request.get("request_id")
+        response: dict[str, object] = {
+            "kind": "read_response",
+            "request_id": request_id,
+            "session_id": self.session_id,
+            "ok": False,
+        }
+        if not isinstance(request_id, str) or request.get("session_id") != self.session_id:
+            response["error"] = "session_changed"
+        elif self._clock() >= deadline or (
+            isinstance(request.get("_received_at"), (int, float))
+            and self._clock() >= cast(float, request["_received_at"]) + cast(float, request.get("deadline_ms", 2000)) / 1000
+        ):
+            response["error"] = "deadline_exceeded"
+        else:
+            source_id = request.get("source_id")
+            target = self._discovery.resolve_source(source_id) if isinstance(source_id, str) else None
+            if target is None:
+                response["error"] = "stale_cursor"
+            else:
+                try:
+                    method = getattr(target, "get_notes_extended")
+                    if not callable(method):
+                        raise AttributeError("get_notes_extended")
+                    notes = method(
+                        cast(int, request["from_pitch"]),
+                        cast(int, request["pitch_span"]),
+                        cast(float, request["from_beat"]),
+                        cast(float, request["beat_span"]),
+                    )
+                    if not isinstance(notes, (list, tuple)):
+                        raise TypeError("get_notes_extended did not return a note list")
+                    limit = cast(int, request["note_limit"])
+                    normalized = [
+                        self._normalize_note(note)
+                        for note in notes[: limit + 1]
+                    ]
+                    response["ok"] = True
+                    response["notes"] = normalized[:limit]
+                    response["truncated"] = len(normalized) > limit
+                except Exception as exc:
+                    response["error"] = type(exc).__name__
+        self._transport.send(response)
+
+    @staticmethod
+    def _normalize_note(note: object) -> dict[str, object]:
+        if not isinstance(note, dict):
+            raise TypeError("note is not a dictionary")
+        required = (
+            "note_id", "pitch", "start_time", "duration", "velocity", "mute",
+            "probability", "velocity_deviation", "release_velocity",
+        )
+        if any(key not in note for key in required):
+            raise ValueError("note is missing required metadata")
+        note_id = note["note_id"]
+        pitch = note["pitch"]
+        mute = note["mute"]
+        if not isinstance(note_id, int) or isinstance(note_id, bool):
+            raise TypeError("note_id must be an integer")
+        if not isinstance(pitch, int) or isinstance(pitch, bool) or not 0 <= pitch <= 127:
+            raise ValueError("pitch is outside MIDI range")
+        if not isinstance(mute, bool):
+            raise TypeError("mute must be boolean")
+        numeric = ("start_time", "duration", "velocity", "probability", "velocity_deviation", "release_velocity")
+        values: dict[str, object] = {"note_id": note_id, "pitch": pitch, "mute": mute}
+        for key in numeric:
+            value = note[key]
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(float(value)):
+                raise TypeError(f"{key} must be numeric")
+            values[key] = float(value)
+        return values
+
     def _apply_listener_work(self, limit: int, deadline: float) -> int:
         processed = 0
+        while self._listener_removals and processed < limit and self._clock() < deadline:
+            key = self._listener_removals.popleft()
+            registered = self._listeners.pop(key, None)
+            if registered is not None:
+                live_object, callback = registered
+                method = getattr(live_object, f"remove_{key[1]}_listener")
+                method(callback)
+                processed += 1
         while self._listener_requests and processed < limit and self._clock() < deadline:
-            live_object, member, callback = self._listener_requests.popleft()
+            source_id, live_object, member, callback = self._listener_requests.popleft()
+            key = (source_id, member)
+            self._listener_request_keys.discard(key)
+            if key in self._listeners:
+                continue
             method = getattr(live_object, f"add_{member}_listener")
             method(callback)
-            self._listeners.append((live_object, member, callback))
+            self._listeners[key] = (live_object, callback)
             processed += 1
         if self._disconnect_requested and not self._disconnected:
+            self._listener_requests.clear()
+            self._listener_request_keys.clear()
             while self._listeners and processed < limit and self._clock() < deadline:
-                live_object, member, callback = self._listeners.pop()
+                (_source_id, member), (live_object, callback) = self._listeners.popitem()
                 method = getattr(live_object, f"remove_{member}_listener")
                 method(callback)
                 processed += 1
@@ -289,6 +446,13 @@ class AdapterRuntime:
                 self._transport.close()
                 self._disconnected = True
         return processed
+
+    def _queue_discovered_listener(self, candidate: ListenerCandidate) -> None:
+        self.register_listener(
+            candidate.value,
+            candidate.member,
+            source_id=candidate.source_id,
+        )
 
     def _connect_if_due(self, now: float) -> None:
         if self._transport.connected or now < self._next_connect:
@@ -300,6 +464,8 @@ class AdapterRuntime:
             "session_id": self.session_id,
             "live_version": self._live_version,
             "edition": self._edition,
+            "edition_source": self._edition_source,
+            "compatibility": self._compatibility,
             "resume": self._connected_once,
             "now": now,
         }
@@ -319,6 +485,9 @@ class AdapterRuntime:
             "protocol_version": 1,
             "session_id": self.session_id,
             "live_version": self._live_version,
+            "edition": self._edition,
+            "edition_source": self._edition_source,
+            "compatibility": self._compatibility,
             "captured_at": datetime.now(timezone.utc).isoformat(),
             "observations": [],
             "removed_source_ids": [],
@@ -348,6 +517,9 @@ class AdapterRuntime:
             "protocol_version": 1,
             "session_id": self.session_id,
             "live_version": self._live_version,
+            "edition": self._edition,
+            "edition_source": self._edition_source,
+            "compatibility": self._compatibility,
             "captured_at": datetime.now(timezone.utc).isoformat(),
             "observations": list(self._pending.values()),
             "removed_source_ids": sorted(self._pending_removals),
@@ -526,6 +698,15 @@ class SocketTransport:
                         if not line:
                             raise OSError("connection closed before acknowledgement")
                         decoded: Any = json.loads(line)
+                        while isinstance(decoded, dict) and decoded.get("kind") == "read_request":
+                            self._inbound.put(decoded)
+                            try:
+                                line = reader.readline()
+                            except TimeoutError as exc:
+                                raise OSError("ack timeout") from exc
+                            if not line:
+                                raise OSError("connection closed before acknowledgement")
+                            decoded = json.loads(line)
                         if not isinstance(decoded, dict) or decoded.get("ok") is not True:
                             raise _TerminalPublicationError(
                                 "publication rejected", "terminal_rejection_resync"

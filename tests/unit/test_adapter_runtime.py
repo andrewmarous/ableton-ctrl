@@ -19,6 +19,7 @@ from ableton_ctrl.adapter.evidence import CoverageEvidenceRecorder
 from ableton_ctrl.adapter.manifest import (
     LIVE_12_4_2_INTRO_MANIFEST,
     PropertySpec,
+    RelationshipSpec,
     TypeSpec,
 )
 from ableton_ctrl.adapter.runtime import AdapterRuntime, SocketTransport
@@ -160,6 +161,72 @@ def test_tick_passes_hard_member_and_time_budget() -> None:
     instance.tick(0.0)
     assert 0 < engine.budgets[0][0] <= 100
     assert 0 < engine.budgets[0][1] <= 4.0
+
+
+def test_disconnected_runtime_retries_without_discovering() -> None:
+    engine = FakeEngine()
+    transport = FakeTransport(failures=10)
+    instance = AdapterRuntime(object(), {}, transport, discovery=engine)
+
+    instance.tick(0.0)
+    instance.tick(0.1)
+    instance.tick(0.25)
+
+    assert transport.connect_times == [0.0, 0.25]
+    assert engine.calls == 0
+    assert instance.pending_count == 0
+
+
+def test_reconnect_discards_old_work_and_requests_replacement() -> None:
+    instance, engine, transport = runtime()
+    instance.tick(0.0)
+    transport.failures = 2
+    transport.connected = False
+    instance.tick(0.1)
+    assert instance.pending_count == 0
+
+    instance.tick(0.35)
+
+    assert engine.calls == 2
+    replacement = [record for record in transport.sent if record.get("kind") == "update"][-1]
+    assert replacement["replace_graph"] is True
+
+
+def test_large_discovery_publishes_bounded_incomplete_chunks() -> None:
+    class LargeEngine:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def observe_targeted(self, *args: object) -> DiscoverySlice:
+            self.calls += 1
+            observations = tuple(
+                ObjectObservation(
+                    source_id=f"Track:{self.calls}:{index}",
+                    type="Track",
+                    path=f"Song/tracks/{self.calls * 100 + index}",
+                    properties={"name": f"Track {index}"},
+                    relationships={},
+                    outcomes=[],
+                    captured_at=datetime.now(timezone.utc),
+                )
+                for index in range(100)
+            )
+            return DiscoverySlice(observations, (), 1, False)
+
+        def observe_replacement(self, *args: object) -> DiscoverySlice:
+            return self.observe_targeted(*args)
+
+    transport = FakeTransport()
+    engine = LargeEngine()
+    instance = AdapterRuntime(object(), {}, transport, discovery=engine)  # type: ignore[arg-type]
+
+    instance.tick(0.0)
+    instance.tick(0.1)
+
+    updates = [record for record in transport.sent if record.get("kind") == "update"]
+    assert len(updates) == 1
+    assert len(updates[0]["observations"]) == 200
+    assert updates[0]["discovery_complete"] is False
 
 
 def test_runtime_forwards_discovery_coverage_and_tick_timing() -> None:
@@ -549,14 +616,56 @@ def test_terminal_capacity_recovery_is_externally_visible_through_store_status()
     assert status.runtime_action == "reduce_observation_size_or_capacity"
 
 
-def test_tick_bounds_listener_work_before_discovery() -> None:
+def test_tick_deduplicates_listener_work_and_leaves_budget_for_discovery() -> None:
     root = ListenableRoot()
     instance, engine, _ = runtime(root, max_members=3)
     for _ in range(10):
         instance.register_listener(root, "tempo")
     instance.tick(0.0)
-    assert len(root.callbacks) == 3
-    assert engine.calls == 0
+    assert len(root.callbacks) == 1
+    assert engine.calls == 1
+
+
+def test_discovered_listeners_are_removed_when_child_disappears() -> None:
+    class Child:
+        value = 1
+
+        def __init__(self) -> None:
+            self.callbacks: list[object] = []
+
+        def add_value_listener(self, callback: object) -> None:
+            self.callbacks.append(callback)
+
+        def remove_value_listener(self, callback: object) -> None:
+            self.callbacks.remove(callback)
+
+    class Song:
+        def __init__(self, child: Child) -> None:
+            self.children = [child]
+
+    manifest = {
+        "Song": TypeSpec(
+            "Song",
+            relationships=(
+                RelationshipSpec("children", "children", "Child", "collection", "children"),
+            ),
+        ),
+        "Child": TypeSpec(
+            "Child",
+            properties=(PropertySpec("value", "value", None, "value", "static"),),
+        ),
+    }
+    child = Child()
+    song = Song(child)
+    instance = AdapterRuntime(song, manifest, FakeTransport())
+    instance.tick(0.0)
+    instance.tick(0.1)
+    assert len(child.callbacks) == 1
+
+    song.children = []
+    instance.tick(10.0)
+    instance.tick(10.1)
+    assert child.callbacks == []
 
 
 def _observation(source_id: str, value: int) -> dict[str, object]:
@@ -764,7 +873,7 @@ def test_remote_script_loads_when_product_name_api_is_absent(monkeypatch: object
     c_instance = CInstance()
     surface = module.create_instance(c_instance)
     assert surface._runtime is not None
-    assert surface._version_status == "supported"
+    assert surface._version_status == "tested"
 
 
 def test_remote_script_publishes_mismatch_without_song_traversal(monkeypatch: object) -> None:
@@ -812,7 +921,8 @@ def test_remote_script_publishes_mismatch_without_song_traversal(monkeypatch: ob
     surface = module.create_instance(c_instance)
     assert surface._runtime is None
     assert c_instance.messages == [
-        "ableton-ctrl requires Live 12.4.2 Intro; found 12.4.1 Intro"
+        "ableton-ctrl is disabled: Unverified Live 12 build requires "
+        "allow_unverified_live=true."
     ]
 
 

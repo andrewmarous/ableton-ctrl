@@ -28,6 +28,8 @@ class CoverageEvidenceRecorder:
         session_id: str,
         live_version: str,
         edition: str,
+        edition_source: str = "unavailable",
+        compatibility: str = "unverified",
     ) -> None:
         self._path = path
         self._expected: set[tuple[str, str]] = set()
@@ -37,6 +39,8 @@ class CoverageEvidenceRecorder:
         self._session_id = session_id
         self._live_version = live_version
         self._edition = edition
+        self._edition_source = edition_source
+        self._compatibility = compatibility
         self._coverage: dict[tuple[str, str], CoverageEntry] = {}
         self._coverage_queue: queue.Queue[tuple[CoverageEntry, ...]] = queue.Queue(maxsize=256)
         self._timings: deque[float] = deque(maxlen=20_000)
@@ -115,18 +119,20 @@ class CoverageEvidenceRecorder:
             return
         maximum = timings[-1]
         p95 = timings[max(0, (95 * len(timings) + 99) // 100 - 1)]
-        records: list[dict[str, object]] = [
-            {
-                "kind": "run",
-                "session_id": self._session_id,
-                "live_version": self._live_version,
-                "edition": self._edition,
-                "discovery_complete": complete and self._expected <= self._coverage.keys(),
-                "max_tick_duration_ms": maximum,
-                "p95_tick_duration_ms": p95,
-                "tick_count": len(timings),
-            }
-        ]
+        run_record: dict[str, object] = {
+            "kind": "run",
+            "session_id": self._session_id,
+            "live_version": self._live_version,
+            "edition": self._edition,
+            "discovery_complete": complete and self._expected <= self._coverage.keys(),
+            "max_tick_duration_ms": maximum,
+            "p95_tick_duration_ms": p95,
+            "tick_count": len(timings),
+        }
+        if self._edition_source != "unavailable" or self._compatibility != "unverified":
+            run_record["edition_source"] = self._edition_source
+            run_record["compatibility"] = self._compatibility
+        records: list[dict[str, object]] = [run_record]
         for key in sorted(self._coverage):
             entry = self._coverage[key]
             record: dict[str, object] = {
