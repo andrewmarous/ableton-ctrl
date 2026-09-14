@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ytkit"
+version = "0.2.0"
+description = "Bounded YouTube transcript extraction"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "selenium>=4.15,<5",
+  "undetected-chromedriver>=3.5,<4",
+  # uc releases import distutils on Python 3.12; setuptools supplies the
+  # compatibility module. Keep this range while that upstream import exists.
+  "setuptools>=69,<81",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0,<9"]
+
+[project.scripts]
+ytkit = "ytkit.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ytkit"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

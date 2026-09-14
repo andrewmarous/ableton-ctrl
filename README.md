@@ -12,6 +12,11 @@ existing MCP server remains available as an optional compatibility interface.
 > Live 12.4.2 is the tested target. Other Live 12 builds require explicit opt-in.
 > Each release requires a real-session test with its target build and edition.
 
+## Development tools
+
+[Local video transcription](tools/transcribe/README.md) is a standalone Python tool for audio and video transcripts.
+It uses faster-whisper turbo on a CUDA GPU inside WSL. It does not require Ableton or Pi.
+
 ## Prerequisites
 
 - macOS
