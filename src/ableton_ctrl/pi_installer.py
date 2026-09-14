@@ -14,6 +14,22 @@ from typing import Sequence
 EXTENSION_RELATIVE_PATH = Path(".pi/agent/extensions/ableton-ctrl.ts")
 CONTROLLER_RELATIVE_PATH = Path(".pi/agent/extensions/ableton-controller.ts")
 SKILL_RELATIVE_PATH = Path(".pi/agent/skills/ableton-ctrl/SKILL.md")
+WIKI_RELATIVE_PATH = Path(".pi/agent/ableton-wiki")
+WIKI_FILES = (
+    "AGENTS.md",
+    "README.md",
+    "raw/.gitkeep",
+    "raw/assets/.gitkeep",
+    "wiki/index.md",
+    "wiki/log.md",
+    "wiki/sources/.gitkeep",
+    "wiki/how-to/.gitkeep",
+    "wiki/concepts/.gitkeep",
+    "wiki/techniques/.gitkeep",
+    "wiki/devices/.gitkeep",
+    "wiki/genres/.gitkeep",
+    "wiki/analyses/.gitkeep",
+)
 MANIFEST_RELATIVE_PATH = Path(".pi/agent/ableton-ctrl-manifest.json")
 BACKUP_RELATIVE_PATH = Path(".pi/agent/backups/ableton-ctrl")
 
@@ -28,6 +44,10 @@ def pi_skill_path(home: Path | None = None) -> Path:
 
 def pi_controller_path(home: Path | None = None) -> Path:
     return (home or Path.home()) / CONTROLLER_RELATIVE_PATH
+
+
+def pi_wiki_path(home: Path | None = None) -> Path:
+    return (home or Path.home()) / WIKI_RELATIVE_PATH
 
 
 def _artifact_text(package_path: str) -> str:
@@ -80,7 +100,12 @@ def _write_manifest(root: Path, payloads: dict[Path, str]) -> None:
 
 def install_pi_artifacts(home: Path | None = None) -> list[Path]:
     root = home or Path.home()
-    targets = [pi_extension_path(root), pi_controller_path(root), pi_skill_path(root)]
+    targets = [
+        pi_extension_path(root),
+        pi_controller_path(root),
+        pi_skill_path(root),
+        pi_wiki_path(root),
+    ]
     existing = _existing_paths(targets)
     if existing:
         formatted = "\n".join(f"- {path}" for path in existing)
@@ -91,13 +116,17 @@ def install_pi_artifacts(home: Path | None = None) -> list[Path]:
             "ableton-ctrl-install-pi."
         )
 
-    extension_target, controller_target, skill_target = targets
+    extension_target, controller_target, skill_target, wiki_target = targets
     extension_target.parent.mkdir(parents=True, exist_ok=True)
     skill_target.parent.mkdir(parents=True, exist_ok=True)
 
     extension_target.write_text(extension_artifact_text(), encoding="utf-8")
     controller_target.write_text(controller_artifact_text(), encoding="utf-8")
     skill_target.write_text(skill_artifact_text(), encoding="utf-8")
+    for relative in WIKI_FILES:
+        target = wiki_target / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(_artifact_text(f"pi_artifacts/wiki/{relative}"), encoding="utf-8")
     _write_manifest(root, _artifact_payloads(root))
     return targets
 

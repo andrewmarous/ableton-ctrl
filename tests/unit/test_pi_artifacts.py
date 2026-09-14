@@ -12,6 +12,7 @@ from ableton_ctrl.pi_installer import (
     pi_extension_path,
     pi_controller_path,
     pi_skill_path,
+    pi_wiki_path,
     run,
     skill_artifact_text,
     upgrade_pi_artifacts,
@@ -105,10 +106,16 @@ def test_first_install_creates_global_pi_extension_and_skill(tmp_path: Path) -> 
         pi_extension_path(tmp_path),
         pi_controller_path(tmp_path),
         pi_skill_path(tmp_path),
+        pi_wiki_path(tmp_path),
     ]
     assert pi_extension_path(tmp_path).read_text(encoding="utf-8") == extension_artifact_text()
     assert pi_controller_path(tmp_path).read_text(encoding="utf-8") == controller_artifact_text()
     assert pi_skill_path(tmp_path).read_text(encoding="utf-8") == skill_artifact_text()
+    wiki = pi_wiki_path(tmp_path)
+    assert (wiki / "AGENTS.md").exists()
+    assert (wiki / "wiki/index.md").exists()
+    assert (wiki / "wiki/log.md").exists()
+    assert (wiki / "raw/assets").is_dir()
 
 
 def test_installer_refuses_to_overwrite_existing_extension(tmp_path: Path) -> None:
@@ -153,12 +160,22 @@ def test_managed_upgrade_backs_up_verified_artifacts(tmp_path: Path) -> None:
     installed = install_pi_artifacts(tmp_path)
     upgraded = upgrade_pi_artifacts(tmp_path)
 
-    assert upgraded == installed
+    assert upgraded == installed[:3]
     manifests = list((tmp_path / ".pi" / "agent" / "backups" / "ableton-ctrl").glob("*"))
     assert len(manifests) == 1
     backup_root = manifests[0]
-    for target in installed:
+    for target in upgraded:
         assert (backup_root / target.relative_to(tmp_path)).read_bytes() == target.read_bytes()
+
+
+def test_upgrade_preserves_the_user_maintained_wiki(tmp_path: Path) -> None:
+    install_pi_artifacts(tmp_path)
+    custom_page = pi_wiki_path(tmp_path) / "wiki/how-to/custom.md"
+    custom_page.write_text("user knowledge", encoding="utf-8")
+
+    upgrade_pi_artifacts(tmp_path)
+
+    assert custom_page.read_text(encoding="utf-8") == "user knowledge"
 
 
 def test_managed_upgrade_refuses_user_modified_artifact(tmp_path: Path) -> None:

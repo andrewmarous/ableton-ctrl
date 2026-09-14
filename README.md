@@ -42,7 +42,12 @@ The Pi installer writes global artifacts under:
 ```text
 ~/.pi/agent/extensions/ableton-ctrl.ts
 ~/.pi/agent/skills/ableton-ctrl/SKILL.md
+~/.pi/agent/ableton-wiki/
 ```
+
+The final path is an empty, persistent Ableton production wiki. Add tutorials,
+articles, and notes under its `raw/` directory, then ask Pi to ingest them. The
+installer seeds the wiki once; managed upgrades preserve everything in it.
 
 The installer records checksums for managed files.
 To install a package update, run `uv run ableton-ctrl-install-pi --upgrade`.
@@ -188,6 +193,7 @@ rm -rf "$HOME/Music/Ableton/User Library/Remote Scripts/AbletonCtrl"
 rm -rf "$HOME/Library/Application Support/ableton-ctrl"
 rm -f "$HOME/.pi/agent/extensions/ableton-ctrl.ts"
 rm -rf "$HOME/.pi/agent/skills/ableton-ctrl"
+rm -rf "$HOME/.pi/agent/ableton-wiki"
 ```
 
 ## Release gate

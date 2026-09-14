@@ -5,6 +5,8 @@ description: Use ableton_ctrl to inspect Ableton Live Sets through the local rea
 
 # Ableton Ctrl
 
+For Ableton how-to questions, tutorials, or electronic music production guidance, read `~/.pi/agent/ableton-wiki/AGENTS.md` and use that wiki. The wiki is separate from extension documentation and remains user-editable across package upgrades.
+
 Use the `ableton_ctrl` tool for Ableton Live inspection tasks. It is read-only: do not use it, or any surrounding workflow, to mutate Live, change parameters, create/delete objects, start transport, write files into the Set, or perform control actions.
 
 The tool accepts flat structured fields and returns the JSON result from the local `ableton-ctrl` CLI. Recovery guidance is included in structured errors; follow the `error.recovery` object before retrying.
