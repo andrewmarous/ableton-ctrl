@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "video-ingest"
+version = "0.1.0"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "ableton-video-transcribe",
+]
+
+[project.optional-dependencies]
+cuda = [
+    "ableton-video-transcribe[cuda]",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<9"]
+
+[tool.uv.sources]
+ableton-video-transcribe = { path = "../transcribe", editable = true }
+
+[project.scripts]
+video-ingest = "video_ingest.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/video_ingest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
