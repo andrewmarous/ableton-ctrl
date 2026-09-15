@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+log() {
+  printf '[%s] [ingest-playlist] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2
+}
+
 usage() {
   cat >&2 <<EOF
 Usage: $0 PLAYLIST_URL [WIKI_DIR [WORK_DIR]]
@@ -28,7 +32,8 @@ for command in uv pi yt-dlp ffmpeg ffprobe jq; do
 done
 
 PLAYLIST_URL=$1
-WIKI_DIR=${2:-"$HOME/.pi/agent/ableton-wiki"}
+WIKI_DIR=${2:-"$HOME/remote-agent-workspace/ableton-ctrl/content-kb"}
+log "Starting ingestion: playlist_url=$PLAYLIST_URL wiki_dir=$WIKI_DIR"
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 INGEST_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
 SKILL_PATH="$INGEST_DIR/skill/video-ingest/SKILL.md"
@@ -50,7 +55,23 @@ cleanup_manifest() {
 }
 trap cleanup_manifest EXIT
 
+log "Resolving playlist metadata with yt-dlp into $PLAYLIST_JSON"
+resolve_started=$SECONDS
 yt-dlp --flat-playlist --dump-single-json --no-warnings -- "$PLAYLIST_URL" >"$PLAYLIST_JSON"
+log "yt-dlp resolved metadata in $((SECONDS - resolve_started))s ($(wc -c <"$PLAYLIST_JSON") bytes)"
+
+# YouTube can resolve a watch URL with an unavailable or invalid list parameter
+# as a single video. Treat that video as a one-entry ingest list.
+if jq -e '._type == "video" and (.id | type == "string") and (.id | length > 0)' \
+  "$PLAYLIST_JSON" >/dev/null; then
+  log "YouTube returned a single video instead of playlist entries; creating a one-entry manifest"
+  jq '{
+    id: ("single-" + .id),
+    title: (.playlist_title // .title // "Single video"),
+    entries: [{id: .id, title: .title, url: .webpage_url}]
+  }' "$PLAYLIST_JSON" >"$PLAYLIST_JSON.tmp"
+  mv -- "$PLAYLIST_JSON.tmp" "$PLAYLIST_JSON"
+fi
 
 if ! jq -e '
   (.entries | type == "array") and
@@ -73,12 +94,21 @@ cp -- "$PLAYLIST_JSON" "$WORK_DIR/playlist.json"
 
 VIDEO_COUNT=$(jq '.entries | length' "$PLAYLIST_JSON")
 PLAYLIST_TITLE=$(jq -r '.title // "Untitled playlist"' "$PLAYLIST_JSON")
+FIRST_VIDEO_ID=$(jq -r '.entries[0].id' "$PLAYLIST_JSON")
+FIRST_VIDEO_TITLE=$(jq -r '.entries[0].title // .entries[0].id' "$PLAYLIST_JSON")
+log "Resolved playlist: id=$PLAYLIST_ID title=$(printf '%q' "$PLAYLIST_TITLE") videos=$VIDEO_COUNT"
+log "First playlist entry: id=$FIRST_VIDEO_ID title=$(printf '%q' "$FIRST_VIDEO_TITLE")"
+printf 'Resolved video IDs:' >&2
+jq -r '.entries[].id' "$PLAYLIST_JSON" | while IFS= read -r id; do printf ' %s' "$id" >&2; done
+printf '\n' >&2
 printf 'Playlist: %s (%s videos)\nWiki: %s\nWork directory: %s\n' \
   "$PLAYLIST_TITLE" "$VIDEO_COUNT" "$WIKI_DIR" "$WORK_DIR"
 
 # The CUDA libraries must already be visible to this process. See
 # tools/transcribe/README.md for the required environment setup.
+log "Synchronizing ingestion dependencies"
 uv sync --project "$INGEST_DIR" --locked --extra cuda
+log "Dependency synchronization complete"
 
 RPC_STDERR="$WORK_DIR/logs/pi-stderr.log"
 : >"$RPC_STDERR"
@@ -90,6 +120,7 @@ coproc PI_RPC {
 RPC_PID=$PI_RPC_PID
 RPC_OUT=${PI_RPC[0]}
 RPC_IN=${PI_RPC[1]}
+log "Started Pi RPC process: pid=$RPC_PID stderr=$RPC_STDERR"
 
 cleanup_rpc() {
   trap - EXIT INT TERM
@@ -136,6 +167,7 @@ run_agent_prompt() {
   local log_file=$3
   local line event_type delta accepted=false assistant_error=false
 
+  log "Sending agent prompt: request_id=$request_id rpc_log=$log_file"
   send_rpc "$(jq -cn --arg id "$request_id" --arg message "$prompt" \
     '{id:$id,type:"prompt",message:$message}')"
 
@@ -147,6 +179,11 @@ run_agent_prompt() {
     fi
 
     event_type=$(jq -r '.type // empty' <<<"$line")
+    case "$event_type" in
+      response|message_start|message_end|agent_start|agent_end|agent_settled|tool_execution_start|tool_execution_end)
+        log "RPC event: request_id=$request_id type=$event_type"
+        ;;
+    esac
     if [[ "$event_type" == response ]] && \
        [[ $(jq -r '.id // empty' <<<"$line") == "$request_id" ]]; then
       if [[ $(jq -r '.success // false' <<<"$line") != true ]]; then
@@ -168,6 +205,7 @@ run_agent_prompt() {
         echo "Pi did not complete the agent run successfully; see $log_file" >&2
         return 1
       fi
+      log "Agent run completed: request_id=$request_id"
       return 0
     fi
   done
@@ -192,6 +230,7 @@ for ((index = 0; index < VIDEO_COUNT; index++)); do
 
   : >"$log_file"
   printf '\n[%d/%d] %s\n' "$number" "$VIDEO_COUNT" "$title"
+  log "Pulling playlist entry: position=$number/$VIDEO_COUNT video_id=$video_id url=$video_url log=$log_file"
 
   latest_revision=""
   if [[ -d "$WIKI_DIR/raw/youtube/$video_id" ]]; then
