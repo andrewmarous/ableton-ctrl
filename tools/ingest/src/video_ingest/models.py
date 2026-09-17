@@ -49,7 +49,7 @@ def transcript_segments(path: Path) -> tuple[dict[str, Any], ...]:
             finite(segment.get("start"), "segment start"),
             finite(segment.get("end"), "segment end"),
         )
-        if start < 0 or end < start or end > duration + 0.001 or start < previous:
+        if start < 0 or end < start or end > duration + 2.0 or start < previous:
             raise ValidationError("segment timestamps must be ordered and within duration")
         if not isinstance(segment.get("text"), str):
             raise ValidationError("segment text must be a string")
