@@ -21,6 +21,7 @@ class BridgeConfig(BaseModel):
     edition: str | None = Field(default=None, min_length=1)
     allow_unverified_live: bool = False
     bridge_executable: str | None = Field(default=None, min_length=1)
+    knowledge_base_path: str | None = Field(default=None, min_length=1)
 
 
 def _write_all(file_descriptor: int, data: bytes) -> None:
@@ -33,6 +34,19 @@ def _write_all(file_descriptor: int, data: bytes) -> None:
 def _load_private_config(config_path: Path) -> BridgeConfig:
     config_path.chmod(0o600)
     return BridgeConfig.model_validate_json(config_path.read_bytes())
+
+
+def set_knowledge_base_path(path: Path, directory: Path | None = None) -> BridgeConfig:
+    """Persist a user-selected knowledge-base path without storing it in kb.json."""
+    config_directory = directory or DEFAULT_CONFIG_DIRECTORY
+    config = load_or_create_config(config_directory)
+    updated = config.model_copy(update={"knowledge_base_path": str(path)})
+    config_path = config_directory / "config.json"
+    temporary_path = config_directory / f".config.{secrets.token_hex(8)}.tmp"
+    temporary_path.write_text(json.dumps(updated.model_dump(), indent=2) + "\\n", encoding="utf-8")
+    temporary_path.chmod(0o600)
+    os.replace(temporary_path, config_path)
+    return updated
 
 
 def load_or_create_config(directory: Path | None = None) -> BridgeConfig:

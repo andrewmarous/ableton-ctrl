@@ -16,6 +16,7 @@ CONTROLLER_RELATIVE_PATH = Path(".pi/agent/extensions/ableton-controller.ts")
 SKILL_RELATIVE_PATH = Path(".pi/agent/skills/ableton-ctrl/SKILL.md")
 WIKI_RELATIVE_PATH = Path(".pi/agent/ableton-wiki")
 WIKI_FILES = (
+    "kb.json",
     "AGENTS.md",
     "README.md",
     "raw/.gitkeep",

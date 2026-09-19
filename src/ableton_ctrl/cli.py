@@ -14,7 +14,11 @@ from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from ableton_ctrl.config import DEFAULT_CONFIG_DIRECTORY, load_or_create_config
+from ableton_ctrl.config import (
+    DEFAULT_CONFIG_DIRECTORY,
+    load_or_create_config,
+    set_knowledge_base_path,
+)
 from ableton_ctrl.contracts import (
     AdapterRuntimeMetadata,
     ChangesPayload,
@@ -43,12 +47,34 @@ from ableton_ctrl.contracts import (
     ClipNotesQuery,
 )
 from ableton_ctrl.mcp.client import BridgeClient
+from ableton_ctrl.install.remote_script import (
+    InstallError,
+    MARKER,
+    PREFERENCES_STEP,
+    REMOTE_SCRIPT_RELATIVE,
+    install as install_remote_script,
+)
+from ableton_ctrl import kb
+from ableton_ctrl.pi_installer import install_pi_artifacts, upgrade_pi_artifacts
 
 CLI_USAGE_RECOVERY: dict[str, JsonValue] = {"action": "call_with_one_json_argument"}
 INVALID_JSON_RECOVERY: dict[str, JsonValue] = {"action": "pass_valid_json_object"}
 SUPPORTED_ACTIONS = [
-    "status", "doctor", "snapshot", "object", "children", "search", "schema", "changes",
-    "project_summary", "track_summary", "device_tree", "selection", "project_diff", "clip_notes", "resource"
+    "status",
+    "doctor",
+    "snapshot",
+    "object",
+    "children",
+    "search",
+    "schema",
+    "changes",
+    "project_summary",
+    "track_summary",
+    "device_tree",
+    "selection",
+    "project_diff",
+    "clip_notes",
+    "resource",
 ]
 UNKNOWN_ACTION_RECOVERY: dict[str, JsonValue] = cast(
     dict[str, JsonValue],
@@ -113,6 +139,7 @@ class ProjectDiffCommand(CliModel):
     session_id: str = Field(min_length=1)
     after_revision: int = Field(ge=0)
     limit: int = Field(default=100, ge=1, le=500)
+
 
 class ClipNotesCommand(CliModel):
     action: Literal["clip_notes"]
@@ -491,18 +518,12 @@ async def _doctor(command: DoctorCommand) -> QueryResponse:
             if status.result.live_connected and status.result.completeness == "complete"
             else "warning"
         )
-        detail = (
-            "connected"
-            if status.result.live_connected
-            else "bridge_running_live_disconnected"
-        )
+        detail = "connected" if status.result.live_connected else "bridge_running_live_disconnected"
     else:
         connection_status = "error"
         detail = status.error.code.value if status.error is not None else "unknown"
     checks.append({"name": "connection", "status": connection_status, "detail": detail})
-    healthy = all(
-        isinstance(item, dict) and item.get("status") == "ok" for item in checks
-    )
+    healthy = all(isinstance(item, dict) and item.get("status") == "ok" for item in checks)
     return QueryResponse(
         ok=True,
         completeness="complete",
@@ -593,7 +614,142 @@ async def _with_adapter_runtime_metadata(
     return response
 
 
+def _home_from_arguments(arguments: list[str]) -> Path | None:
+    if "--home" not in arguments:
+        return None
+    index = arguments.index("--home")
+    if index + 1 == len(arguments):
+        raise ValueError("--home requires PATH")
+    value = Path(arguments[index + 1])
+    del arguments[index : index + 2]
+    return value
+
+
+def _run_management(argv: Sequence[str]) -> int | None:
+    arguments = list(argv)
+    if not arguments or arguments[0] not in {
+        "install",
+        "upgrade",
+        "uninstall",
+        "doctor",
+        "status",
+        "call",
+        "kb",
+    }:
+        return None
+    command = arguments.pop(0)
+    try:
+        home = _home_from_arguments(arguments)
+        if command == "call":
+            if len(arguments) != 1:
+                raise ValueError("call requires one JSON argument")
+            print(
+                "The `call` form is preferred; the one-argument JSON form remains compatible.",
+                file=sys.stderr,
+            )
+            return run(arguments)
+        if command == "kb":
+            if not arguments:
+                raise ValueError("kb requires init, add, status, lint, migrate, or path")
+            operation = arguments.pop(0)
+            configured_path = os.environ.get("ABLETON_CTRL_KB_PATH")
+            if configured_path is None:
+                config_home = home / "Library/Application Support/ableton-ctrl" if home else None
+                configured_path = load_or_create_config(config_home).knowledge_base_path
+            root = Path(configured_path) if configured_path else None
+            if operation == "init":
+                if len(arguments) != 1:
+                    raise ValueError("kb init requires PATH")
+                created = kb.init(Path(arguments[0]))
+                config_home = home / "Library/Application Support/ableton-ctrl" if home else None
+                set_knowledge_base_path(created, config_home)
+                print(created)
+                return 0
+            if root is None:
+                raise ValueError("set ABLETON_CTRL_KB_PATH or use `kb init PATH`")
+            if operation == "add":
+                allow = "--allow-duplicate" in arguments
+                arguments = [item for item in arguments if item != "--allow-duplicate"]
+                if len(arguments) != 1:
+                    raise ValueError("kb add requires SOURCE")
+                print(json.dumps(kb.add(root, Path(arguments[0]), allow), indent=2))
+                return 0
+            if operation == "lint":
+                findings = kb.lint(root)
+                print(json.dumps({"ok": not findings, "findings": findings}, indent=2))
+                return 0 if not findings else 1
+            if operation == "status":
+                print(json.dumps(kb.load(root), indent=2))
+                return 0
+            if operation == "path":
+                print(root)
+                return 0
+            if operation == "migrate":
+                print("Knowledge base is already at the current schema.")
+                return 0
+            raise ValueError(f"unknown kb command: {operation}")
+        if command in {"status", "doctor"}:
+            # Keep machine-readable JSON for compatibility and automation.
+            return run([json.dumps({"action": command})])
+        if command == "install":
+            with_pi, with_kb, dry_run = (
+                "--with-pi" in arguments,
+                "--with-kb" in arguments,
+                "--dry-run" in arguments,
+            )
+            kb_path = None
+            if "--kb-path" in arguments:
+                i = arguments.index("--kb-path")
+                kb_path = Path(arguments[i + 1])
+                del arguments[i : i + 2]
+            destination = install_remote_script(home=home, dry_run=dry_run)
+            print(
+                ("Would install" if dry_run else "Installed")
+                + f" AbletonCtrl Remote Script at {destination}"
+            )
+            if with_pi and not dry_run:
+                install_pi_artifacts(home)
+            if with_kb:
+                target = kb_path or ((home or Path.home()) / "Documents" / "Ableton Knowledge")
+                if not dry_run:
+                    kb.init(target)
+                    config_home = (
+                        (home / "Library/Application Support/ableton-ctrl") if home else None
+                    )
+                    set_knowledge_base_path(target, config_home)
+                print(
+                    ("Would initialize" if dry_run else "Initialized")
+                    + f" knowledge base at {target}"
+                )
+            print(PREFERENCES_STEP)
+            return 0
+        if command == "upgrade":
+            if "--with-pi" in arguments:
+                upgrade_pi_artifacts(home)
+            print("No Remote Script upgrade is required; reinstall replaces managed files safely.")
+            return 0
+        if command == "uninstall":
+            root = home or Path.home()
+            destination = root / REMOTE_SCRIPT_RELATIVE
+            if destination.exists() and not (destination / MARKER).is_file():
+                raise InstallError(f"refusing to remove unmanaged destination: {destination}")
+            if "--yes" not in arguments:
+                print(f"Would remove {destination}. Re-run with --yes to confirm.")
+                return 1
+            if destination.exists():
+                shutil.rmtree(destination)
+                print(f"Removed {destination}")
+            return 0
+    except (ValueError, FileNotFoundError, FileExistsError, InstallError, IndexError) as exc:
+        print(f"ableton-ctrl: {exc}", file=sys.stderr)
+        return 2
+    return None
+
+
 def run(argv: Sequence[str]) -> int:
+    managed = _run_management(argv)
+    if managed is not None:
+        return managed
     raw, parse_error = _parse_json_argument(argv)
     if parse_error is not None:
         _print_response(parse_error)

@@ -11,7 +11,7 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "ableton-live-intro-mcp"
+name = "ableton-ctrl"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
