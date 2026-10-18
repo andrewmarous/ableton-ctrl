@@ -106,7 +106,10 @@ def install_pi_artifacts(home: Path | None = None) -> list[Path]:
         pi_skill_path(root),
         pi_wiki_path(root),
     ]
-    existing = _existing_paths(targets)
+    wiki_target = pi_wiki_path(root)
+    if wiki_target.exists() and not wiki_target.is_dir():
+        raise NotADirectoryError(f"Wiki path is not a directory: {wiki_target}")
+    existing = _existing_paths(targets[:3])
     if existing:
         formatted = "\n".join(f"- {path}" for path in existing)
         raise FileExistsError(
@@ -123,10 +126,11 @@ def install_pi_artifacts(home: Path | None = None) -> list[Path]:
     extension_target.write_text(extension_artifact_text(), encoding="utf-8")
     controller_target.write_text(controller_artifact_text(), encoding="utf-8")
     skill_target.write_text(skill_artifact_text(), encoding="utf-8")
-    for relative in WIKI_FILES:
-        target = wiki_target / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(_artifact_text(f"pi_artifacts/wiki/{relative}"), encoding="utf-8")
+    if not wiki_target.exists():
+        for relative in WIKI_FILES:
+            target = wiki_target / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(_artifact_text(f"pi_artifacts/wiki/{relative}"), encoding="utf-8")
     _write_manifest(root, _artifact_payloads(root))
     return targets
 

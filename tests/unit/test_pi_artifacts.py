@@ -118,6 +118,31 @@ def test_first_install_creates_global_pi_extension_and_skill(tmp_path: Path) -> 
     assert (wiki / "raw/assets").is_dir()
 
 
+def test_first_install_preserves_existing_wiki(tmp_path: Path) -> None:
+    wiki = pi_wiki_path(tmp_path)
+    wiki.mkdir(parents=True)
+    (wiki / "README.md").write_text("user knowledge", encoding="utf-8")
+    (wiki / "custom.md").write_text("custom page", encoding="utf-8")
+    before = {path.name: path.read_bytes() for path in wiki.iterdir()}
+
+    install_pi_artifacts(tmp_path)
+
+    assert {path.name: path.read_bytes() for path in wiki.iterdir()} == before
+    assert pi_extension_path(tmp_path).exists()
+    assert (tmp_path / ".pi/agent/ableton-ctrl-manifest.json").is_file()
+
+
+def test_first_install_rejects_wiki_file_before_writing_artifacts(tmp_path: Path) -> None:
+    wiki = pi_wiki_path(tmp_path)
+    wiki.parent.mkdir(parents=True)
+    wiki.write_text("not a directory", encoding="utf-8")
+
+    with pytest.raises(NotADirectoryError):
+        install_pi_artifacts(tmp_path)
+
+    assert not pi_extension_path(tmp_path).exists()
+
+
 def test_installer_refuses_to_overwrite_existing_extension(tmp_path: Path) -> None:
     target = pi_extension_path(tmp_path)
     target.parent.mkdir(parents=True)

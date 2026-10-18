@@ -486,7 +486,10 @@ class BridgeServer:
             return True
 
         response = self._query_response(request, result)
-        payload = response.model_dump(mode="json", exclude_none=True)
+        # Status includes required nullable fields, including before Live connects.
+        payload = response.model_dump(
+            mode="json", exclude_none=not isinstance(response.result, StatusPayload)
+        )
         await self._send(
             writer,
             payload,
