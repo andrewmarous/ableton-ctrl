@@ -6,10 +6,7 @@ build-backend = "hatchling.build"
 name = "ableton-live-intro-mcp"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = [
-    "mcp>=1.9,<2",
-    "pydantic>=2.11,<3",
-]
+dependencies = []
 
 [dependency-groups]
 dev = [
@@ -20,10 +17,7 @@ dev = [
 ]
 
 [project.scripts]
-ableton-ctrl = "ableton_ctrl.cli:main"
-ableton-ctrl-bridge = "ableton_ctrl.bridge.server:main"
-ableton-ctrl-install-pi = "ableton_ctrl.pi_installer:main"
-ableton-ctrl-mcp = "ableton_ctrl.mcp.server:main"
+ableton-upstream = "ableton_ctrl.upstream:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ableton_ctrl"]
@@ -43,16 +37,3 @@ namespace_packages = true
 explicit_package_bases = true
 mypy_path = ["src", "."]
 
-[[tool.mypy.overrides]]
-module = [
-    "tests.contract.test_bridge_server",
-    "tests.contract.test_end_to_end",
-    "tests.contract.test_mcp_stdio",
-    "tests.unit.test_adapter_runtime",
-    "tests.unit.test_config",
-    "tests.unit.test_contracts",
-    "tests.unit.test_discovery",
-    "tests.unit.test_live_smoke",
-    "tests.unit.test_store",
-]
-ignore_errors = true

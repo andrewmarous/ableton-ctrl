@@ -1,1 +1,1 @@
-"""Read-only Ableton Live inspection bridge and MCP server."""
+"""Upstream AbletonMCP installation and production wiki workflow."""
