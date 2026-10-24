@@ -1,3 +1,5 @@
 # Troubleshooting
 
-Run `ableton-ctrl doctor`. It never prints the bridge secret. Confirm that Live is running and that `AbletonCtrl` is selected as its Control Surface.
+Run `uv run ableton-upstream doctor` and `pi mcp list`.
+Check that Live is running and AbletonMCP is selected as its Control Surface.
+See the [integration guide](upstream-integration.md) for setup and rollback instructions.

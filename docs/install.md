@@ -1,8 +1,9 @@
 # Install
 
+From this repository, run:
+
 ```bash
-uv tool install ableton-ctrl
-ableton-ctrl install
+uv run ableton-upstream install
 ```
 
-Use `--with-pi` to install Pi artifacts and `--with-kb --kb-path PATH` to create a user-owned knowledge base. `--home PATH` is for isolated tests.
+Follow the [integration guide](upstream-integration.md) to activate the Control Surface and connect Pi.
