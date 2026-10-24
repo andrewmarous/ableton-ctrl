@@ -57,14 +57,21 @@ trap cleanup_manifest EXIT
 
 log "Resolving playlist metadata with yt-dlp into $PLAYLIST_JSON"
 resolve_started=$SECONDS
-yt-dlp --flat-playlist --dump-single-json --no-warnings -- "$PLAYLIST_URL" >"$PLAYLIST_JSON"
+# --yes-playlist is required for watch URLs that contain both v= and list=.
+# --ignore-config prevents a user-level --no-playlist setting from overriding
+# this playlist-specific script.
+yt-dlp --ignore-config --yes-playlist --flat-playlist --dump-single-json \
+  --no-warnings -- "$PLAYLIST_URL" >"$PLAYLIST_JSON"
 log "yt-dlp resolved metadata in $((SECONDS - resolve_started))s ($(wc -c <"$PLAYLIST_JSON") bytes)"
 
-# YouTube can resolve a watch URL with an unavailable or invalid list parameter
-# as a single video. Treat that video as a one-entry ingest list.
-if jq -e '._type == "video" and (.id | type == "string") and (.id | length > 0)' \
-  "$PLAYLIST_JSON" >/dev/null; then
-  log "YouTube returned a single video instead of playlist entries; creating a one-entry manifest"
+if jq -e '._type == "video"' "$PLAYLIST_JSON" >/dev/null; then
+  if [[ "$PLAYLIST_URL" == *\?list=* || "$PLAYLIST_URL" == *\&list=* ]]; then
+    echo "The playlist URL resolved as one video. Check that the playlist is public and that its list ID is valid." >&2
+    exit 1
+  fi
+
+  # Preserve support for a plain video URL as a one-entry ingest list.
+  log "The URL is a single video; creating a one-entry manifest"
   jq '{
     id: ("single-" + .id),
     title: (.playlist_title // .title // "Single video"),
@@ -115,7 +122,8 @@ RPC_STDERR="$WORK_DIR/logs/pi-stderr.log"
 coproc PI_RPC {
   cd -- "$WIKI_DIR"
   exec uv run --project "$INGEST_DIR" --locked --extra cuda -- \
-    pi --mode rpc --no-session --no-skills --skill "$SKILL_PATH" --approve
+    pi --mode rpc --no-session --no-skills \
+      --skill "$SKILL_PATH" --approve
 } 2>>"$RPC_STDERR"
 RPC_PID=$PI_RPC_PID
 RPC_OUT=${PI_RPC[0]}

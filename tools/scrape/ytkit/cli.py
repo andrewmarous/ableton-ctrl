@@ -9,7 +9,7 @@ import tempfile
 
 from .fetch import fetch_many
 from .models import FetchResult
-from .organize import kb_chunks, paragraphs, punctuation_density, to_markdown, to_plain
+from .organize import paragraphs, to_markdown, to_plain
 
 
 def _export(results: list[FetchResult], fmt: str, raw: bool) -> str:
