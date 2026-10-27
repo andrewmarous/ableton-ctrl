@@ -48,7 +48,7 @@ def test_model_reuse_outputs_and_cleanup(backend, media, tmp_path):
         return chunks(), SimpleNamespace(duration=3.0)
 
     engine.transcribe.side_effect = transcribe
-    with stt.Transcriber(cache_dir=tmp_path / "cache") as transcriber:
+    with stt.Transcriber(backend="cuda", cache_dir=tmp_path / "cache") as transcriber:
         result = transcriber.transcribe(source)
         transcriber.transcribe(source)
         factory.assert_called_once_with(
@@ -80,7 +80,7 @@ def test_inference_error_cleans_audio_and_model(backend, media):
 
     engine.transcribe.return_value = (broken_chunks(), SimpleNamespace(duration=3))
     with pytest.raises(RuntimeError, match="inference failed"):
-        with stt.Transcriber() as transcriber:
+        with stt.Transcriber(backend="cuda") as transcriber:
             transcriber.transcribe(source)
     assert not paths[0].exists()
     engine.model.unload_model.assert_called_once()
@@ -89,14 +89,14 @@ def test_inference_error_cleans_audio_and_model(backend, media):
 def test_missing_input_does_not_load_model(backend, tmp_path):
     factory, _ = backend
     with pytest.raises(FileNotFoundError):
-        stt.Transcriber().transcribe(tmp_path / "missing.mp4")
+        stt.Transcriber(backend="cuda").transcribe(tmp_path / "missing.mp4")
     factory.assert_not_called()
 
 
 def test_empty_transcript(backend, media, tmp_path):
     _, engine = backend
     engine.transcribe.return_value = (iter(()), SimpleNamespace(duration=1))
-    with stt.Transcriber(compute_type="int8_float16") as transcriber:
+    with stt.Transcriber(backend="cuda", compute_type="int8_float16") as transcriber:
         result = transcriber.transcribe(media[0])
     text, data = result.write(tmp_path / "out")
     assert text.read_text() == ""
@@ -133,7 +133,16 @@ def test_cli_success(backend, media, tmp_path, monkeypatch, capsys):
     _, engine = backend
     engine.transcribe.return_value = (iter(()), SimpleNamespace(duration=1))
     monkeypatch.setattr(
-        sys, "argv", ["video-transcribe", str(media[0]), "--output-dir", str(tmp_path / "out")]
+        sys,
+        "argv",
+        [
+            "video-transcribe",
+            str(media[0]),
+            "--backend",
+            "cuda",
+            "--output-dir",
+            str(tmp_path / "out"),
+        ],
     )
     assert main() == 0
     assert "a video.mp4.json" in capsys.readouterr().out

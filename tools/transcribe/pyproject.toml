@@ -5,15 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "ableton-video-transcribe"
 version = "0.1.0"
-description = "Local CUDA transcription for development workflows"
+description = "Local Metal, CPU, and CUDA transcription for development workflows"
 requires-python = ">=3.11,<3.14"
-dependencies = [
-    "faster-whisper>=1.1,<2",
-    "ctranslate2>=4.5,<5",
-]
+dependencies = []
 
 [project.optional-dependencies]
 cuda = [
+    "faster-whisper>=1.1,<2",
+    "ctranslate2>=4.5,<5",
     "nvidia-cublas-cu12>=12,<13",
     "nvidia-cudnn-cu12>=9,<10",
 ]

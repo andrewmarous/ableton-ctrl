@@ -6,7 +6,7 @@ This package implements the single-video evidence workflow in `docs/video-ingest
 uv sync --project tools/ingest --locked
 ```
 
-Include the CUDA runtime dependencies when running transcription:
+For NVIDIA CUDA transcription, include the optional runtime dependencies:
 
 ```sh
 uv sync --project tools/ingest --locked --extra cuda
@@ -18,7 +18,7 @@ Run commands through the locked environment, for example:
 uv run --project tools/ingest --locked video-ingest --help
 ```
 
-`prepare` uses `yt-dlp` and `ffprobe`; `transcribe` delegates to `tools/transcribe`; `screenshots` uses FFmpeg; `publish` creates an immutable revision. The transcriber requires CUDA and English audio as documented in `../transcribe/README.md`.
+`prepare` uses `yt-dlp` and `ffprobe`; `transcribe` delegates to `tools/transcribe`; `screenshots` uses FFmpeg; `publish` creates an immutable revision. The transcriber supports Metal, CUDA, and CPU inference for English audio. See [transcription setup](../transcribe/README.md). Metal and CPU require whisper.cpp; CPU fallback uses a smaller model.
 
 Jobs are kept outside `raw/`. The publication contains source metadata, the exact transcript outputs, agent-authored candidate records, frame records, navigation context, and a SHA-256 manifest. Downloaded media and temporary files are never copied into the published bundle.
 
@@ -28,7 +28,7 @@ The prototype accepts one finite public video. Playlist-only URLs, live streams,
 
 The test script starts Pi in print mode with only the local `video-ingest` skill enabled. Pi prepares and transcribes the video, reviews the complete transcript, writes `candidates.json`, extracts screenshots, and publishes the revision.
 
-CUDA must be configured before the script starts. See `../transcribe/README.md`. Pi must also be installed and authenticated with a model provider.
+Configure a local transcription backend before the script starts. See `../transcribe/README.md`. Export `WHISPER_CPP_BINARY` for Metal or CPU inference. Pi must also be installed and authenticated with a model provider.
 
 From the repository root, run:
 

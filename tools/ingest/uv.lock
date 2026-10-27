@@ -10,21 +10,19 @@ resolution-markers = [
 name = "ableton-video-transcribe"
 version = "0.1.0"
 source = { editable = "../transcribe" }
-dependencies = [
-    { name = "ctranslate2" },
-    { name = "faster-whisper" },
-]
 
 [package.optional-dependencies]
 cuda = [
+    { name = "ctranslate2" },
+    { name = "faster-whisper" },
     { name = "nvidia-cublas-cu12" },
     { name = "nvidia-cudnn-cu12" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "ctranslate2", specifier = ">=4.5,<5" },
-    { name = "faster-whisper", specifier = ">=1.1,<2" },
+    { name = "ctranslate2", marker = "extra == 'cuda'", specifier = ">=4.5,<5" },
+    { name = "faster-whisper", marker = "extra == 'cuda'", specifier = ">=1.1,<2" },
     { name = "nvidia-cublas-cu12", marker = "extra == 'cuda'", specifier = ">=12,<13" },
     { name = "nvidia-cudnn-cu12", marker = "extra == 'cuda'", specifier = ">=9,<10" },
 ]

@@ -38,7 +38,7 @@ The screenshot tool must not decide which topics matter. It consumes an explicit
 
 Completion: the job has a writable cache and destination, plus all required dependencies.
 
-The transcriber currently requires CUDA and transcribes English. The prototype preserves those constraints without CPU fallback.
+The transcriber supports English audio through CUDA, whisper.cpp Metal, and whisper.cpp CPU inference. Automatic GPU selection permits a smaller-model CPU fallback. See `tools/transcribe/README.md` for setup.
 
 ### 2. Download the video
 
@@ -67,7 +67,7 @@ Use subprocess argument arrays or the yt-dlp Python API. Keep credentials and si
 
 Completion: both existing transcript outputs exist without schema or text modifications.
 
-Use the existing CLI or `Transcriber` API. Keep model ownership and CUDA behavior inside the transcription package.
+Use the existing CLI or `Transcriber` API. Keep model ownership and backend selection inside the transcription package.
 
 The transcript JSON contains an absolute local source path. Published source metadata preserves provenance after cache removal.
 
