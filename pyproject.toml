@@ -25,7 +25,6 @@ Repository = "https://github.com/ableton-ctrl/ableton-ctrl"
 Issues = "https://github.com/ableton-ctrl/ableton-ctrl/issues"
 
 [project.optional-dependencies]
-audio = ["numpy>=2,<3", "scipy>=1.14,<2", "soundfile>=0.13,<1", "sounddevice>=0.5,<1", "matplotlib>=3.9,<4", "pyloudnorm>=0.1.1,<1"]
 cuda = ["faster-whisper>=1.1,<2", "ctranslate2>=4.5,<5", "nvidia-cublas-cu12>=12,<13", "nvidia-cudnn-cu12>=9,<10"]
 
 [project.scripts]
