@@ -1,6 +1,7 @@
 # Audio capture and inspection
 
-`ableton-audio` records a loopback input and inspects audio files locally through FFmpeg.
+`ableton audio` records a loopback input and inspects audio files locally through FFmpeg.
+`ableton-audio` remains an equivalent standalone command.
 It does not control Live playback, solo states, or routing.
 File inspection does not require Ableton.
 
@@ -12,10 +13,14 @@ Install FFmpeg, then install this package through the normal wheel or source pro
 brew install ffmpeg
 # From a source checkout:
 uv sync
-uv run ableton-audio --help
+uv run ableton audio --help
 ```
 
-No Python audio extra is required.
+Normal package installation includes the audio commands. No Python audio extra is required.
+`ableton setup` checks FFmpeg and installs audio guidance in the Pi skill.
+Setup stops before changes if the required tools or filters are missing.
+`ableton doctor` includes audio diagnostics, even when Live diagnostics succeed.
+Knowledge-only setup does not require FFmpeg.
 Capture uses FFmpeg's macOS AVFoundation input.
 Inspection uses `ffprobe`, `astats`, `ebur128`, `showwavespic`, and `showspectrumpic`.
 Our wrapper selects inputs, runs those tools, and returns artifacts. It does not implement audio DSP.
@@ -31,14 +36,25 @@ Our wrapper selects inputs, runs those tools, and returns artifacts. It does not
 7. List the available inputs:
 
 ```sh
-ableton-audio devices
+ableton audio devices
 ```
 
-8. Set the loopback input name:
+8. Save the loopback input name through normal plugin setup:
 
 ```sh
-export ABLETON_AUDIO_DEVICE='BlackHole 2ch'
+ableton setup --audio-device 'BlackHole 2ch'
+ableton audio doctor
 ```
+
+Setup saves the input in `~/.config/ableton-ctrl/config.json` and preserves it during later setup runs.
+The selected input applies to both command names and to the installed agent skill.
+The skill uses the installed Python environment, independent of Pi's shell PATH.
+Reload Pi after setup to load the new skill guidance.
+
+For a temporary override, set `ABLETON_AUDIO_DEVICE` or pass `--device`.
+The selection order is `--device`, then the environment variable, then the saved input.
+`doctor` checks tools and reports the selected input without opening a device or starting playback.
+A missing input does not prevent file inspection or plugin installation.
 
 If macOS requests microphone access for the terminal, allow access.
 An AVFoundation audio device ID also works with `--device`. IDs can change when devices reconnect.
@@ -48,9 +64,9 @@ Live capture currently supports macOS only. File inspection works wherever FFmpe
 ## Capture
 
 ```sh
-ableton-audio capture --seconds 8
+ableton audio capture --seconds 8
 # Explicit device and sample rate:
-ableton-audio capture --device 'BlackHole 2ch' --seconds 8 --sample-rate 48000
+ableton audio capture --device 'BlackHole 2ch' --seconds 8 --sample-rate 48000
 ```
 
 The command opens the input and records for the specified duration.
@@ -72,7 +88,7 @@ The recorder cannot identify tracks or remove other audio routed to the same loo
 ## Inspect
 
 ```sh
-ableton-audio inspect /absolute/path/to/capture.wav
+ableton audio inspect /absolute/path/to/capture.wav
 ```
 
 The command returns JSON with measurements, a waveform PNG, and a spectrogram PNG.

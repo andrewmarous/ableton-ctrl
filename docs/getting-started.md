@@ -69,7 +69,7 @@ Verify the installation:
 ableton --help
 ```
 
-**Success:** the help lists `setup`, `doctor`, `chat`, and `kb`.
+**Success:** the help lists `setup`, `doctor`, `audio`, `chat`, and `kb`.
 If the command is missing, see [package command not found](troubleshooting.md#package-command-not-found).
 
 ## 3. Run guided setup
@@ -83,6 +83,7 @@ ableton setup --install-whisper
 Read the plan before you approve it. Save the printed `Setup recovery journal` path.
 
 Setup creates the knowledge base, builds whisper.cpp, installs the Remote Script, and configures Pi.
+Audio commands and agent guidance are included. Setup checks FFmpeg and its required filters without opening an audio input.
 On Apple Silicon, the managed build uses Metal. Existing knowledge remains untouched.
 The build needs an internet connection and can take several minutes.
 
@@ -139,6 +140,35 @@ Compare the answer with Live.
 
 **Success:** the tempo and track order match your Set.
 If they do not, stop here and use [Live connection problems](troubleshooting.md#live-connection-problems).
+
+### Optional: capture and inspect Live audio
+
+Audio inspection is part of the normal plugin installation:
+
+```sh
+ableton audio doctor
+ableton audio inspect /path/to/existing-recording.wav
+```
+
+For capture, configure a loopback device and route Live's output through it.
+Follow [audio setup](audio.md#configure-capture-on-the-laptop), then save the selected input:
+
+```sh
+ableton setup --audio-device 'BlackHole 2ch'
+```
+
+Reload Pi after setup. The installed skill includes capture and inspection instructions.
+Use existing Live controls to choose the passage and solo tracks or groups.
+While Live plays, run:
+
+```sh
+ableton audio capture --seconds 8
+```
+
+Inspect the returned WAV path with `ableton audio inspect`.
+**Success:** the JSON contains measurements and two PNG paths. The recording contains the intended Live output.
+Loopback routing and macOS device access require verification on the laptop.
+The diagnostic command does not open an input or prove that routing works.
 
 ## 6. Add your first tutorial
 

@@ -6,7 +6,9 @@ import json
 import os
 import platform
 import shutil
+import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 FORK_COMMIT = "558abb654040f40b4f671df764f355350b2cf843"
@@ -75,7 +77,9 @@ def install(home: Path, uvx: str, user_library: str | None = None,
         _write_json_atomic(config, data)
         skill.parent.mkdir(parents=True, exist_ok=True)
         text = artifact_text("pi_artifacts/skill/ableton-upstream/SKILL.md")
-        skill.write_text(text.replace("~/.pi/agent/ableton-wiki", str(wiki)))
+        audio_command = shlex.join([sys.executable, "-m", "ableton_ctrl.audio"])
+        skill.write_text(text.replace("~/.pi/agent/ableton-wiki", str(wiki))
+                         .replace("__ABLETON_AUDIO_COMMAND__", audio_command))
         if not wiki.exists():
             for relative in WIKI_FILES:
                 target = wiki / relative
@@ -94,13 +98,22 @@ def main() -> None:
     uvx = shutil.which("uvx")
     if not uvx:
         parser.error("Install uv before this command.")
+    from . import audio
     if args.action == "install":
+        try:
+            audio.require_environment()
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
+            parser.error(str(exc))
         backup = install(Path.home(), uvx, args.user_library)
         print(f"Backup: {backup}")
         print("Restart Live. Select AbletonMCP in an unused Control Surface row, with Input/Output None.")
         print("Run /reload in Pi, then pi mcp list and ableton-upstream doctor.")
+        print("Audio commands and skill guidance are installed. Run ableton audio doctor.")
+        print("Configure capture with ableton setup --audio-device NAME after routing Live through loopback.")
     else:
+        audio_status = audio.diagnostics()
+        print("Audio: " + json.dumps(audio_status, indent=2))
         doctor_command = command(uvx, "doctor", "--json")
         if args.user_library:
             doctor_command += ["--user-library", args.user_library]
-        raise SystemExit(subprocess.run(doctor_command).returncode)
+        raise SystemExit(subprocess.run(doctor_command).returncode or int(not audio_status["inspection_ready"]))

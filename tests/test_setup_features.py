@@ -103,6 +103,7 @@ def test_setup_config_failure_restores_whole_installation(tmp_path, monkeypatch)
     from ableton_ctrl import cli, kb
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.setattr("shutil.which", lambda name: "/bin/" + name)
+    monkeypatch.setattr("ableton_ctrl.audio.require_environment", lambda: {})
     remote = tmp_path / "Music/Ableton/User Library/Remote Scripts/AbletonMCP/__init__.py"
     remote.parent.mkdir(parents=True)
     remote.write_text("verified working plugin")

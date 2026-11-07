@@ -1,6 +1,6 @@
 ---
 name: ableton-ctrl
-description: Answer music-production questions from the production wiki, inspect the current Ableton Live Set, and perform explicitly requested Live edits.
+description: Answer music-production questions from the wiki, inspect and edit Ableton Live, capture its audio output, and inspect recordings with FFmpeg.
 ---
 
 # Production workflow
@@ -55,6 +55,37 @@ Saved snapshots exclude unsaved changes. A matching file digest does not prove l
 The initial writer supports linear and step writes on enabled continuous track mixer and device parameters.
 Curved writes, returns, master automation, quantized parameters, and lane deletion are unsupported.
 Audio preparation has a separate undo step. The final Arrangement edit requests one further undo group.
+
+## Audio capture and inspection
+
+Use these local commands through the terminal tool. They use this plugin's Python environment, independent of shell PATH.
+
+```sh
+__ABLETON_AUDIO_COMMAND__ doctor
+__ABLETON_AUDIO_COMMAND__ devices
+__ABLETON_AUDIO_COMMAND__ capture --seconds 8
+__ABLETON_AUDIO_COMMAND__ inspect /absolute/path/to/recording.wav
+```
+
+Capture records Live's output through a configured loopback input, such as BlackHole.
+The input comes from `--device`, then `ABLETON_AUDIO_DEVICE`, then the saved plugin configuration.
+If no input is configured, list devices and ask the user which loopback receives Live's output.
+Save that choice with `ableton setup --audio-device 'BlackHole 2ch'`, or pass `--device` on each capture.
+Capture requires macOS, FFmpeg, and Live output routing to the loopback device.
+File inspection works without Live and without a configured input.
+
+Use existing AbletonMCP tools to select a passage, control playback, and solo tracks or groups for exploration.
+Capture hears everything routed to that output, including active returns and master processing.
+For ongoing playback, capture directly. To include a passage's start, launch capture as a background terminal job before playback.
+Allow extra time for device initialization and effect tails. The opening message is not a readiness signal.
+Verify that the recorded passage is the intended one; capture is not synchronized to Live's transport.
+
+After capture completes successfully, inspect the returned `path`.
+Read the measurements and open both PNG paths in `images` with the image-reading tool.
+Use the saved measurement log if a value needs investigation.
+Report measured facts separately from musical interpretation. Possible clipping is a peak-level indicator, not proof of distortion.
+Images and measurements are observations, not direct audio hearing. Captures remain available for playback.
+Report missing routing or device access as a capture limitation; continue inspection of existing files.
 
 ## Connection diagnostics
 

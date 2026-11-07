@@ -9,10 +9,22 @@ This page covers component responsibilities, the advanced installer, and Live ac
 - `src/ableton_ctrl/upstream.py` pins its immutable commit through `uvx --from`.
 - The current candidate version is `1.8.2.dev15`. Arrangement tools require Live 12.4 or later.
 - Pi manages the MCP connection, tool discovery, and tool calls.
-- This package owns setup, diagnostics, workflow guidance, knowledge ingestion, and publication.
+- This package owns setup, diagnostics, workflow guidance, knowledge ingestion, publication, and local audio commands.
+- FFmpeg supplies loopback capture, measurements, and images; this package wraps its commands and artifacts.
 
 Only upstream MCP provides Live access. This package does not add another Live transport or API adapter.
 Edits require an explicit user request. Initial verification uses inspection only.
+
+## Local audio integration
+
+Normal package installation includes `ableton audio` and the equivalent `ableton-audio` command.
+Setup checks FFmpeg and installs capture and inspection guidance in the managed Pi skill.
+The installed skill uses the package's Python interpreter rather than depending on shell command discovery.
+The agent calls these local commands through its terminal tool. No additional MCP server or Live bridge is installed.
+Existing upstream tools control playback and solo states; FFmpeg records the selected loopback input.
+`ableton setup --audio-device NAME` saves the input while preserving other application configuration.
+Setup does not install a loopback driver or change Live's routing.
+See [audio setup and laptop verification](audio.md).
 
 ## Arrangement acceptance
 
@@ -88,7 +100,7 @@ It does not save a custom knowledge directory or build a transcriber.
 From a source checkout, prefix the command with `uv run`.
 
 After installation, complete the [manual Live connection](getting-started.md#4-connect-live).
-For upstream diagnostics only, run:
+For upstream diagnostics and audio-tool availability, run:
 
 ```sh
 ableton-upstream doctor

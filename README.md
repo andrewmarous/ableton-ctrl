@@ -16,6 +16,16 @@ The guide explains both, without assuming that a public release asset exists.
 
 ## After setup
 
+Audio commands and agent guidance are included in normal setup, using FFmpeg:
+
+```sh
+ableton audio doctor
+ableton audio inspect ./recording.wav
+```
+
+To capture Live output, [configure a loopback input](docs/audio.md), then run `ableton audio capture --seconds 8`.
+
+
 ```sh
 ableton kb add ./tutorial.mp4 --synthesize
 ableton kb status

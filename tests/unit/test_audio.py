@@ -11,6 +11,8 @@ from ableton_ctrl import audio
 @pytest.fixture(autouse=True)
 def artifacts(tmp_path, monkeypatch):
     monkeypatch.setenv("ABLETON_AUDIO_DIR", str(tmp_path / "artifacts"))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("ABLETON_AUDIO_DEVICE", raising=False)
 
 
 @pytest.fixture

@@ -15,7 +15,63 @@ import sys
 import uuid
 
 
+from .config import read_configuration
+
+
 FILTERS = ("astats", "ebur128", "showwavespic", "showspectrumpic")
+
+
+def configured_device() -> str | None:
+    value = os.environ.get("ABLETON_AUDIO_DEVICE") or read_configuration().get("audio_device")
+    if value is not None and not isinstance(value, str):
+        raise ValueError("The configured audio_device must be an input name or ID string.")
+    return value
+
+
+def diagnostics() -> dict:
+    """Check installed tools without opening an input or starting Live playback."""
+    ffmpeg = shutil.which("ffmpeg")
+    ffprobe = shutil.which("ffprobe")
+    missing_filters = list(FILTERS)
+    capture_backend = False
+    errors = []
+    if ffmpeg:
+        try:
+            filters = run([ffmpeg, "-hide_banner", "-filters"], timeout=15).stdout
+            missing_filters = [
+                name for name in FILTERS if not re.search(r"(?m)^\s*\S+\s+" + name + r"\s", filters)
+            ]
+            if platform.system() == "Darwin":
+                devices = run([ffmpeg, "-hide_banner", "-devices"], timeout=15).stdout
+                capture_backend = bool(re.search(r"(?m)^\s*D\S*\s+avfoundation\s", devices))
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+            errors.append(str(exc))
+    device = configured_device()
+    return {
+        "ffmpeg": ffmpeg,
+        "ffprobe": ffprobe,
+        "missing_filters": missing_filters,
+        "inspection_ready": bool(ffmpeg and ffprobe and not missing_filters and not errors),
+        "capture_backend_available": capture_backend,
+        "configured_device": device,
+        "errors": errors,
+        "capture_note": "Configure a loopback input with ableton setup --audio-device NAME. "
+        "Routing and permissions require a capture test; no input was opened.",
+    }
+
+
+def require_environment() -> dict:
+    result = diagnostics()
+    if not result["inspection_ready"]:
+        raise RuntimeError(
+            "Audio tools are unavailable. Install FFmpeg (macOS: brew install ffmpeg). "
+            f"Diagnostics: {json.dumps(result)}"
+        )
+    if platform.system() == "Darwin" and not result["capture_backend_available"]:
+        raise RuntimeError(
+            "FFmpeg lacks AVFoundation capture support. Install the Homebrew FFmpeg build."
+        )
+    return result
 
 
 def executable(name: str) -> str:
@@ -280,25 +336,36 @@ def inspect_audio(path: str) -> dict:
         raise
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    commands = parser.add_subparsers(dest="command", required=True)
+def configure_parser(parser: argparse.ArgumentParser) -> None:
+    commands = parser.add_subparsers(dest="audio_command", required=True)
+    commands.add_parser("doctor", help="Check FFmpeg filters and saved input without recording")
     commands.add_parser("devices", help="List macOS audio input devices")
     capture = commands.add_parser("capture", help="Record a configured loopback input")
     capture.add_argument("--seconds", type=float, default=8)
-    capture.add_argument("--device", default=os.environ.get("ABLETON_AUDIO_DEVICE"))
+    capture.add_argument(
+        "--device", help="Loopback name or ID; overrides environment and saved input"
+    )
     capture.add_argument("--channels", type=int, default=2)
     capture.add_argument("--sample-rate", type=int, default=48000)
     inspect = commands.add_parser("inspect", help="Measure audio and create FFmpeg images")
     inspect.add_argument("path")
-    args = parser.parse_args(argv)
+
+
+def execute(args: argparse.Namespace) -> int:
     try:
-        if args.command == "devices":
+        if args.audio_command == "doctor":
+            result = diagnostics()
+            print(json.dumps(result, indent=2, allow_nan=False))
+            return int(not result["inspection_ready"])
+        if args.audio_command == "devices":
             result = list_devices()
-        elif args.command == "capture":
-            if not args.device:
-                raise ValueError("Set --device or ABLETON_AUDIO_DEVICE to the loopback input.")
-            result = capture_audio(args.seconds, args.device, args.channels, args.sample_rate)
+        elif args.audio_command == "capture":
+            device = args.device or configured_device()
+            if not device:
+                raise ValueError(
+                    "Set --device, ABLETON_AUDIO_DEVICE, or ableton setup --audio-device NAME."
+                )
+            result = capture_audio(args.seconds, device, args.channels, args.sample_rate)
         else:
             result = inspect_audio(args.path)
         print(json.dumps(result, indent=2, allow_nan=False))
@@ -306,6 +373,12 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
         print(f"Audio error: {exc}", file=sys.stderr)
         return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    configure_parser(parser)
+    return execute(parser.parse_args(argv))
 
 
 if __name__ == "__main__":

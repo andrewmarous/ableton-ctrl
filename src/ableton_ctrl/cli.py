@@ -11,21 +11,18 @@ import sys
 import zipfile
 from pathlib import Path
 
-from . import kb, library, upstream
+from . import audio, kb, library, upstream
+from .config import configuration, read_configuration
 from .transaction import Transaction, backup_path, rollback
 from . import whisper_install
-
-
-def configuration() -> Path:
-    return Path.home() / ".config/ableton-ctrl/config.json"
 
 
 def root_path(value: Path | None) -> Path:
     if value:
         return value.expanduser().resolve()
-    config = configuration()
-    if config.exists():
-        return Path(json.loads(config.read_text())["knowledge_base"])
+    saved = read_configuration().get("knowledge_base")
+    if saved:
+        return Path(saved)
     return Path.home() / ".pi/agent/ableton-wiki"
 
 
@@ -65,6 +62,7 @@ def main() -> int:
     setup = sub.add_parser("setup")
     setup.add_argument("--knowledge-only", action="store_true")
     setup.add_argument("--user-library")
+    setup.add_argument("--audio-device", help="Save the loopback input name or AVFoundation audio ID")
     setup.add_argument("--yes", action="store_true", help="Apply the displayed setup plan")
     setup.add_argument("--install-whisper", action="store_true", help="Download and compile pinned whisper.cpp")
     setup.add_argument("--backend", choices=["auto", "metal", "cpu"], default="auto")
@@ -79,6 +77,7 @@ def main() -> int:
     doctor = sub.add_parser("doctor")
     doctor.add_argument("--user-library")
     sub.add_parser("chat")
+    audio.configure_parser(sub.add_parser("audio", help="Capture and inspect audio with FFmpeg"))
     knowledge = sub.add_parser("kb").add_subparsers(dest="action", required=True)
     knowledge.add_parser("init")
     add = knowledge.add_parser("add")
@@ -104,10 +103,22 @@ def main() -> int:
     imp.add_argument("archive", type=Path)
     args = parser.parse_args()
     try:
+        if args.command == "audio":
+            return audio.execute(args)
         root = root_path(args.kb) if args.command not in {"rollback", "transcriber"} else Path.home()
         if args.command == "setup":
             print(f"Knowledge directory: {root}")
             print("Save configuration: " + str(configuration()))
+            saved = read_configuration()
+            device = args.audio_device if args.audio_device is not None else saved.get("audio_device")
+            if args.audio_device is not None and (
+                not device.strip() or device.lower() in {"default", "none"} or ":" in device
+            ):
+                raise ValueError("Choose an explicit loopback name or audio ID from ableton audio devices.")
+            if not args.knowledge_only:
+                audio.require_environment()
+                print("Audio: FFmpeg capture and inspection commands and Pi skill guidance are included.")
+            print(f"Loopback input: {device or 'not configured; run ableton setup --audio-device NAME'}")
             if not args.knowledge_only:
                 if not shutil.which("uvx"):
                     raise ValueError("Install uv first, or use --knowledge-only.")
@@ -133,10 +144,14 @@ def main() -> int:
                     print(f"Transcriber: {whisper_install.install(Path.home(), args.backend)}")
                 if not args.knowledge_only:
                     upstream.install(Path.home(), shutil.which("uvx") or "uvx", args.user_library, wiki_path=root)
-                kb._write_json_atomic(configuration(), {"schema_version": 1, "knowledge_base": str(root)})
+                saved.update({"schema_version": 1, "knowledge_base": str(root)})
+                if args.audio_device is not None:
+                    saved["audio_device"] = args.audio_device
+                kb._write_json_atomic(configuration(), saved)
             if not args.knowledge_only:
                 print("Restart Live. Select AbletonMCP in an unused Control Surface row; set Input/Output to None.")
                 print("In Pi, run /reload. Then run ableton doctor and pi mcp list.")
+                print("Audio: run ableton audio doctor. Configure Live output through a loopback device for capture.")
             print("Setup complete. Add notes with: ableton kb add ./notes.md")
         elif args.command == "rollback":
             if not args.yes and input("Restore this trusted local backup? [y/N] ").lower() != "y":
@@ -155,6 +170,8 @@ def main() -> int:
                 print(f"{executable}: {found or 'missing'}")
                 if not found:
                     missing.append(executable)
+            audio_status = audio.diagnostics()
+            print("Audio: " + json.dumps(audio_status, indent=2))
             managed = whisper_install.binary_path(Path.home(), whisper_install.selected_backend("auto"))
             print("whisper-cli: " + (os.environ.get("WHISPER_CPP_BINARY") or shutil.which("whisper-cli") or (str(managed) if managed.is_file() else "missing; run ableton transcriber install")))
             print(f"Knowledge: {root}")
@@ -167,8 +184,8 @@ def main() -> int:
                 command = upstream.command("uvx", "doctor", "--json")
                 if args.user_library:
                     command += ["--user-library", args.user_library]
-                return subprocess.run(command).returncode or int(bool(findings))
-            return int(bool(findings or missing))
+                return subprocess.run(command).returncode or int(bool(findings or missing or not audio_status["inspection_ready"]))
+            return int(bool(findings or missing or not audio_status["inspection_ready"]))
         elif args.command == "chat":
             return subprocess.run(["pi", f"Use the production knowledge at {root}. Separate source evidence from observed Live facts. Do not edit Live without explicit permission."]).returncode
         elif args.action == "import":
