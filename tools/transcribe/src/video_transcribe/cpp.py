@@ -66,12 +66,21 @@ class CppBackend:
         self.model = model
         self.cache = cache
         self.threads = threads
-        requested = binary or os.environ.get("WHISPER_CPP_BINARY", "whisper-cli")
-        executable = shutil.which(requested)
+        requested = binary or os.environ.get("WHISPER_CPP_BINARY")
+        executable = shutil.which(requested or "whisper-cli")
+        if not executable and not requested:
+            # Managed builds retain their libraries beside the executable.
+            base = Path.home() / ".local/share/ableton-ctrl/whisper"
+            choices = [backend] if backend == "metal" else ["cpu", "metal"]
+            for choice in choices:
+                candidate = base / f"v1.8.3-{choice}/source/build/bin/whisper-cli"
+                if candidate.is_file():
+                    executable = str(candidate)
+                    break
         if not executable:
             raise BackendError(
-                f"whisper.cpp executable not found: {requested}. "
-                "Install whisper.cpp v1.8.3 and set WHISPER_CPP_BINARY or --whisper-cli."
+                f"whisper.cpp executable not found: {requested or 'whisper-cli'}. "
+                "Run ableton transcriber install, or set WHISPER_CPP_BINARY or --whisper-cli."
             )
         self.binary = executable
         self.path = model_path(model, cache)

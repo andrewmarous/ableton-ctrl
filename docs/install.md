@@ -1,9 +1,9 @@
-# Install
+# Installation
 
-From this repository, run:
+Use [Getting started](getting-started.md) for the complete installation path and your first published tutorial.
 
-```bash
-uv run ableton-upstream install
-```
+- No release wheel available? Use [source installation](distribution.md#install-from-source), then return to guided setup.
+- Installation failed? See [Troubleshooting](troubleshooting.md).
+- Need to restore an installation? See [Recovery](recovery.md).
 
-Follow the [integration guide](upstream-integration.md) to activate the Control Surface and connect Pi.
+This page remains as a link for older documentation. It does not define a separate installation procedure.

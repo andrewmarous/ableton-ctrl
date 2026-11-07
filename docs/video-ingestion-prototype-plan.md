@@ -1,5 +1,8 @@
 # Video ingestion prototype implementation plan
 
+> Historical prototype scope, not the complete application workflow.
+> For current ingestion and technique publication, use the [knowledge-base guide](knowledge-base.md).
+
 ## Goal and scope
 
 Package a single-video ingestion workflow into an agent skill. The calling agent downloads a video, transcribes it, and optionally selects semantic screenshot candidates.

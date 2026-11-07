@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Upstream AbletonMCP installation and production workflows for Pi."
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 classifiers = [
   "Development Status :: 3 - Alpha",
   "License :: OSI Approved :: MIT License",
@@ -24,7 +24,13 @@ Homepage = "https://github.com/ableton-ctrl/ableton-ctrl"
 Repository = "https://github.com/ableton-ctrl/ableton-ctrl"
 Issues = "https://github.com/ableton-ctrl/ableton-ctrl/issues"
 
+[project.optional-dependencies]
+cuda = ["faster-whisper>=1.1,<2", "ctranslate2>=4.5,<5", "nvidia-cublas-cu12>=12,<13", "nvidia-cudnn-cu12>=9,<10"]
+
 [project.scripts]
+ableton = "ableton_ctrl.cli:main"
+video-transcribe = "video_transcribe.cli:main"
+video-ingest = "video_ingest.cli:main"
 ableton-upstream = "ableton_ctrl.upstream:main"
 
 [tool.hatch.build.targets.wheel]
@@ -33,11 +39,19 @@ packages = ["src/ableton_ctrl"]
 [tool.hatch.build]
 include = ["src/ableton_ctrl/**/*.py", "src/ableton_ctrl/**/*.json", "src/ableton_ctrl/**/*.ts", "src/ableton_ctrl/**/*.md", "src/ableton_ctrl/**/*.gitkeep"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"tools/transcribe/src/video_transcribe" = "video_transcribe"
+"tools/ingest/src/video_ingest" = "video_ingest"
+
+[tool.hatch.build.targets.sdist]
+include = ["src/", "tools/transcribe/src/", "tools/ingest/src/", "README.md", "LICENSE.md", "pyproject.toml"]
+
 [dependency-groups]
 dev = ["mypy>=1.15", "pytest>=8.3", "pytest-asyncio>=0.26", "ruff>=0.11"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src", "tools/transcribe/src", "tools/ingest/src"]
 asyncio_mode = "auto"
 addopts = ["--import-mode=importlib"]
 

@@ -1,5 +1,9 @@
 # Local video transcription
 
+This page is a developer reference for standalone transcription and manual backend setup.
+For normal installation, follow [Getting started](../../docs/getting-started.md).
+The main package can build whisper.cpp with `ableton transcriber install`; manual compilation below is an alternative.
+
 This tool transcribes local audio and video files in English. Media stays on the machine.
 It supports three local inference backends:
 

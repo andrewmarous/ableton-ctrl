@@ -1,10 +1,16 @@
 # ytkit
 
+This page is a developer reference for the standalone browser scraper.
+Chrome and this tool are not prerequisites for normal ableton-ctrl installation.
+For the user journey, follow [Getting started](../../docs/getting-started.md).
+
 `ytkit` extracts YouTube transcript-panel rows with a bounded browser session and
 writes validated, structured results. Chrome is required. The only supported
 browser backend is `undetected-chromedriver`.
 
 ## Install and run
+
+Run these commands from `tools/scrape/` in a source checkout.
 
 ```sh
 uv sync --locked

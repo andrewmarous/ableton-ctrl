@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from ableton_ctrl.upstream import install
+from ableton_ctrl.upstream import command, install
 
 
 def test_install_preserves_wiki_and_configuration(tmp_path: Path) -> None:
@@ -20,7 +20,7 @@ def test_install_preserves_wiki_and_configuration(tmp_path: Path) -> None:
     extension.write_text('legacy')
     with patch('ableton_ctrl.upstream.subprocess.run') as run:
         backup = install(tmp_path, '/bin/uvx')
-        run.assert_called_once_with(['/bin/uvx', 'mcp-server-ableton-live@1.8.1', 'install'], check=True)
+        run.assert_called_once_with(command('/bin/uvx', 'install'), check=True)
         install(tmp_path, '/bin/uvx')
     assert json.loads(config.read_text())['mcpServers']['other'] == {'command': 'other'}
     assert json.loads(config.read_text())['custom'] == 1

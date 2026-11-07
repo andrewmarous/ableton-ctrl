@@ -1,6 +1,11 @@
 # Video ingestion prototype
 
-This package implements the single-video evidence workflow in `docs/video-ingestion-prototype-plan.md`. It has no model API dependency. It uses [uv](https://docs.astral.sh/uv/) for dependency management. From the repository root, create the locked development environment with:
+This page is a developer reference for the standalone evidence-bundle workflow.
+For the supported user journey, start with [Getting started](../../docs/getting-started.md).
+For tutorial ingestion and technique publication, use the [knowledge-base guide](../../docs/knowledge-base.md).
+The `video-ingest publish` command below publishes an evidence bundle, not wiki technique pages.
+
+This package implements the single-video evidence workflow in the [prototype plan](../../docs/video-ingestion-prototype-plan.md). It has no model API dependency. It uses [uv](https://docs.astral.sh/uv/) for dependency management. From the repository root, create the locked development environment with:
 
 ```sh
 uv sync --project tools/ingest --locked

@@ -1,72 +1,112 @@
-# Upstream AbletonMCP integration
+# Integration reference
 
-The replacement uses `mcp-server-ableton-live@1.8.1` and its bundled Remote Script.
-Pi manages MCP directly. This repository adds installation and workflow guidance, not a Live API adapter.
+For normal installation, use [Getting started](getting-started.md).
+This page covers component responsibilities, the advanced installer, and Live acceptance tests.
 
-## Installation
+## Responsibilities
 
-1. Install uv.
-2. From this repository, run:
+- The maintained `andrewmarous/ableton-live-mcp` fork owns the Remote Script and Live tools.
+- `src/ableton_ctrl/upstream.py` pins its immutable commit through `uvx --from`.
+- The current candidate version is `1.8.2.dev15`. Arrangement tools require Live 12.4 or later.
+- Pi manages the MCP connection, tool discovery, and tool calls.
+- This package owns setup, diagnostics, workflow guidance, knowledge ingestion, and publication.
 
-   ```bash
-   uv run ableton-upstream install
-   ```
+Only upstream MCP provides Live access. This package does not add another Live transport or API adapter.
+Edits require an explicit user request. Initial verification uses inspection only.
 
-   For a relocated User Library, use:
+## Arrangement acceptance candidate
 
-   ```bash
-   uv run ableton-upstream install --user-library "/path/to/User Library"
-   ```
+Issue #14 has an implementation candidate, not a completed Live acceptance result.
+Use the [acceptance guide](arrangement-acceptance.md) in a disposable Set.
+The [capability matrix](arrangement-capability-matrix.md) lists supported operations and evidence.
+The [reconstruction contract](arrangement-reconstruction-contract.md) defines temporary resources and recovery.
 
-3. Fully restart Live.
-4. In Settings > Tempo & MIDI, select AbletonMCP in an unused Control Surface row.
-5. Set that row's Input and Output to None.
-6. Run `/reload` in Pi.
-7. Run diagnostics:
+The new tools keep edits on existing tracks. They require previews, explicit authorization, and a saved recovery Set.
+Clip edits keep automation at absolute timeline positions. Automation does not automatically move with clips.
+Automation inspection uses a verified saved `.als` snapshot, with manual-save fallback.
+The initial automation writer supports continuous track mixer and device parameters with linear or step interpolation.
+Cross-track copies, destination overlap replacement, curved writes, master/return lanes, and quantized parameters remain unsupported.
 
-   ```bash
-   uv run ableton-upstream doctor
-   pi mcp list
-   ```
+The installer and MCP configuration use the same immutable fork source.
+Diagnostics compare the installed bundle and the running build identifier, not only the package version.
+A conflicting older MCP entry or Remote Script requires explicit review before replacement.
+The acceptance guide explains migration without silently replacing either component.
+
+## Native creator controls acceptance
+
+The candidate adds Session launch settings, scene tempo and meter overrides, Simpler sample controls, and additional mixer controls.
+Use the [creator controls acceptance guide](creator-controls-acceptance.md) in the same disposable test environment.
+These ten tools expose native controls rather than high-level composition requests.
+They include inspection, validated writes, observed values, and structured unsupported responses.
+Mode changes require a separate inspection before mode-dependent writes.
+Settings tools manage their own undo groups and run outside `batch_commands`.
+Actual Live acceptance remains pending.
+
+## Advanced Live-only installation
+
+The normal `ableton setup` command also creates application configuration and can build whisper.cpp.
+For only the upstream integration and its Pi resources, use:
+
+```sh
+ableton-upstream install
+```
+
+For a relocated User Library:
+
+```sh
+ableton-upstream install --user-library "/path/to/User Library"
+```
+
+This is an advanced alternative, not an extra step after guided setup.
+It does not save a custom knowledge directory or build a transcriber.
+From a source checkout, prefix the command with `uv run`.
+
+After installation, complete the [manual Live connection](getting-started.md#4-connect-live).
+For upstream diagnostics only, run:
+
+```sh
+ableton-upstream doctor
+```
 
 Use the same `--user-library` argument for installation and diagnostics.
-If an existing Remote Script differs, upstream refuses replacement. Review it before using upstream's `install --replace` command.
-That upstream command retains a backup.
+The normal `ableton doctor` command also reports application prerequisites and library findings.
 
-## Preservation and retirement
+## Managed files and conflicts
 
-Installation backs up existing `mcp.json`, the managed skill, and the two legacy extension files under `~/.pi/agent/backups/ableton-upstream/`.
-It merges the AbletonMCP entry and preserves unrelated configuration.
+Installation merges the AbletonMCP entry in `~/.pi/agent/mcp.json` and preserves unrelated entries.
 A conflicting AbletonMCP entry requires manual review.
-It replaces the managed skill and removes `ableton-ctrl.ts` and `ableton-controller.ts` from the extensions directory.
-Existing wiki contents remain untouched. New installations receive wiki templates.
-Ingestion tools under `tools/` remain unchanged.
+Installation replaces the managed skill at `~/.pi/agent/skills/ableton-ctrl/SKILL.md`.
+It removes the retired `ableton-ctrl.ts` and `ableton-controller.ts` extensions after snapshot creation.
+Existing wiki contents remain untouched.
 
-The legacy Python transport, custom MCP server, extension sources, installers, smoke scripts, and their tests are removed.
-The obsolete Live implementation plans and bridge resources are also removed.
-Only upstream MCP provides Live access. The legacy command entry points are removed.
+The installer delegates Remote Script installation to the pinned upstream package without forced replacement.
+If the installed script differs, upstream refuses replacement.
+Review that conflict before any manual upstream replacement command.
+Do not enable two bridges on the same port.
 
-To roll back Pi resources, restore the backup files and remove the newly added AbletonMCP entry if it did not exist before.
-Preserve unrelated configuration changes during rollback. Disable the AbletonMCP Control Surface manually if necessary.
+Setup and the advanced installer snapshot managed files before changes.
+For backup locations, automatic recovery, and rollback limits, see [Recovery](recovery.md).
 
-## Read-only acceptance
+## Live acceptance test
 
-Use Live 12.4.6 on the target computer. Do not start playback or edit the Set.
+Use a known Set on the target computer. Keep playback stopped throughout this test.
 
-- Confirm that upstream doctor reports matching installed and running scripts.
-- Confirm that native Pi MCP connects.
-- Request tempo and track names. Compare track order with Live.
-- Inspect a rack with nested chains where upstream supports inspection.
-- Answer a production question with wiki references and observed Live facts clearly separated.
-- Confirm that existing wiki files remain unchanged after installation and another installation.
+1. Run `ableton doctor` with the installed User Library path if necessary.
+2. Verify that the upstream diagnostic reports a matching installed and running script.
+3. Run `pi mcp list`.
+4. Verify that AbletonMCP connects.
+5. Ask Pi for the tempo and track names with an inspection-only request.
+6. Compare the track order and tempo with Live.
+7. Inspect a rack with nested chains where upstream supports it.
+8. Ask a production question with published wiki references.
+9. Verify that the answer separates source advice from observed Live facts.
+10. Verify that existing wiki files remain unchanged after repeated setup.
 
-Edits require a separate explicit request. Use a disposable Set for edit tests.
+Edits need a separate explicit request. Use a disposable Set for edit tests.
 Before destructive production edits, save a recovery point.
 
-## Verification in this workspace
+## Retired interfaces
 
-Before legacy retirement, all 236 repository tests passed.
-The legacy tests are now removed with their implementation. The replacement installer tests remain.
-The installation attempt stopped because the default Ableton User Library does not exist here.
-Upstream doctor reported no installed script and connection refusal on port 9877.
-Pi reported no configured MCP servers. Real-session acceptance remains pending on the target computer.
+The old custom bridge, MCP server, controller, and Pi extension installers are retired.
+The commands `ableton-ctrl`, `ableton-ctrl-bridge`, `ableton-ctrl-mcp`, and `ableton-ctrl-install-pi` are removed.
+Use the `ableton` CLI for the current user workflow.

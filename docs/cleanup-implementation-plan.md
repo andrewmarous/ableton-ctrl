@@ -1,5 +1,8 @@
 # Repository Cleanup Implementation Plan
 
+> Historical plan, not current installation instructions. Some interfaces below are retired.
+> For the current user journey, follow [Getting started](getting-started.md).
+
 ## Purpose
 
 This plan turns the repository into a user-facing Ableton inspection tool. It covers installation, documentation, knowledge-base management, and internal cleanup.

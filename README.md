@@ -1,57 +1,37 @@
 # ableton-ctrl
 
-Production workflow for upstream AbletonMCP, native Pi MCP, and a persistent production wiki.
+Connect Pi to Ableton Live and build a production knowledge base from your notes and tutorials.
+Ask questions about your Set, with source references separate from observed Live facts.
+Live edits require an explicit request.
 
-## Install
+## Start here
 
-Install [uv](https://docs.astral.sh/uv/), then run from this repository:
+**[Install and get started](docs/getting-started.md)**
 
-```bash
-uv run ableton-upstream install
+The guide covers prerequisites, package installation, the Live connection, and your first published tutorial.
+The primary path targets Apple Silicon Macs. Local transcription supports Metal and CPU.
+
+**Release status:** the package is not on PyPI. Installation requires a trusted wheel or a source checkout.
+The guide explains both, without assuming that a public release asset exists.
+
+## After setup
+
+```sh
+ableton kb add ./tutorial.mp4 --synthesize
+ableton kb status
+ableton chat
 ```
 
-For a relocated Ableton User Library:
+Technique synthesis sends transcript text to your configured Pi model. Provider charges can apply.
+Generated pages stay in draft form until you review and publish them. Transcription stays local.
 
-```bash
-uv run ableton-upstream install --user-library "/path/to/User Library"
-```
+## Guides
 
-Follow the [integration guide](docs/upstream-integration.md) to activate the Remote Script and verify the connection.
-Installation preserves existing wiki contents and unrelated Pi configuration.
-It backs up and removes the two legacy Pi extensions.
+- [Getting started](docs/getting-started.md): install, connect, and publish your first tutorial.
+- [Knowledge base](docs/knowledge-base.md): add sources, review drafts, search, and share your library.
+- [Troubleshooting](docs/troubleshooting.md): resolve installation, connection, and ingestion errors.
+- [Recovery](docs/recovery.md): restore an installation without overwriting later changes.
+- [Development and distribution](docs/distribution.md): install from source, build wheels, and prepare releases.
+- [Integration reference](docs/upstream-integration.md): component responsibilities and advanced installation.
 
-## Responsibilities
-
-- Upstream `wstierhout/ableton-live-mcp` owns the Remote Script and Live inspection and editing tools.
-- Native Pi MCP owns connections, tool discovery, and tool calls.
-- This repository owns the version pin, installation, diagnostics, workflow skill, wiki templates, and ingestion tools.
-- The wiki at `~/.pi/agent/ableton-wiki` stores persistent production knowledge.
-
-Upstream supports edits. Edits require an explicit user request.
-Initial verification uses inspection only and does not start playback.
-
-## Diagnostics
-
-```bash
-uv run ableton-upstream doctor
-pi mcp list
-```
-
-## Ingestion
-
-The independent tools remain available:
-
-- [Video ingestion](tools/ingest/README.md)
-- [Scraping](tools/scrape/README.md)
-- [Transcription](tools/transcribe/README.md)
-
-## Development
-
-```bash
-uv run pytest
-```
-
-The custom bridge, MCP server, controller, installers, and their tests are retired.
-The `ableton-ctrl`, `ableton-ctrl-bridge`, `ableton-ctrl-mcp`, and `ableton-ctrl-install-pi` commands are removed.
-Use `ableton-upstream` instead.
-Real-session verification requires Live on the target computer. Installer failure-handling improvements remain deferred.
+The independent [ingestion](tools/ingest/README.md), [scraping](tools/scrape/README.md), and [transcription](tools/transcribe/README.md) tools remain available for development.
