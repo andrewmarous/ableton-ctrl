@@ -27,6 +27,8 @@ Generated pages stay in draft form until you review and publish them. Transcript
 
 ## Guides
 
+- [Audio capture and inspection](docs/audio.md): record Live through loopback and inspect audio locally.
+
 - [Getting started](docs/getting-started.md): install, connect, and publish your first tutorial.
 - [Knowledge base](docs/knowledge-base.md): add sources, review drafts, search, and share your library.
 - [Troubleshooting](docs/troubleshooting.md): resolve installation, connection, and ingestion errors.
