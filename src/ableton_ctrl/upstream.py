@@ -9,7 +9,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-FORK_COMMIT = "6448770636b0ba9c272a83cd62613df3db458f63"
+FORK_COMMIT = "558abb654040f40b4f671df764f355350b2cf843"
 PACKAGE = f"git+https://github.com/andrewmarous/ableton-live-mcp.git@{FORK_COMMIT}"
 SERVER = "AbletonMCP"
 
