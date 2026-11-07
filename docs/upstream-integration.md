@@ -14,14 +14,16 @@ This page covers component responsibilities, the advanced installer, and Live ac
 Only upstream MCP provides Live access. This package does not add another Live transport or API adapter.
 Edits require an explicit user request. Initial verification uses inspection only.
 
-## Arrangement acceptance candidate
+## Arrangement acceptance
 
-Issue #14 has an implementation candidate, not a completed Live acceptance result.
+Acceptance is complete by explicit user override.
+The [acceptance record](issue-14-acceptance-results.md) separates observed results from unverified checks.
 Use the [acceptance guide](arrangement-acceptance.md) in a disposable Set.
 The [capability matrix](arrangement-capability-matrix.md) lists supported operations and evidence.
 The [reconstruction contract](arrangement-reconstruction-contract.md) defines temporary resources and recovery.
 
-The new tools keep edits on existing tracks. They require previews, explicit authorization, and a saved recovery Set.
+The new tools keep edits on existing tracks. They require previews and explicit authorization.
+A saved recovery Set is required by default.
 Clip edits keep automation at absolute timeline positions. Automation does not automatically move with clips.
 Automation inspection uses a verified saved `.als` snapshot, with manual-save fallback.
 The initial automation writer supports continuous track mixer and device parameters with linear or step interpolation.
@@ -32,6 +34,30 @@ Diagnostics compare the installed bundle and the running build identifier, not o
 A conflicting older MCP entry or Remote Script requires explicit review before replacement.
 The acceptance guide explains migration without silently replacing either component.
 
+## Optional recovery-file requirement
+
+The pinned fork includes `ABLETON_REQUIRE_RECOVERY_ALS` and the native API fixes from branch `configurable-recovery`.
+
+By default, Arrangement execution requires an existing, nonempty `.als` recovery file.
+For disposable Sets, users can disable that requirement in the MCP server configuration:
+
+```json
+"env": {
+  "ABLETON_REQUIRE_RECOVERY_ALS": "false"
+}
+```
+
+Add `env` to the `AbletonMCP` entry in `~/.pi/agent/mcp.json`.
+Preserve the other server configuration fields.
+Restart the MCP server after configuration changes.
+Install the matching updated Remote Script and restart Live before use.
+Only the explicit value `false` disables the requirement; unset or unrecognized values keep it enabled.
+
+Explicit edit authorization, reconstruction authorization, preview validation, and automation snapshot checks remain required.
+If supplied, a recovery path must still reference a valid, nonempty `.als` file.
+Results report when no recovery file exists. Recovery can then depend on Undo and retained native copies.
+This option does not enable automatic saving or remove the saved-snapshot requirement for automation.
+
 ## Native creator controls acceptance
 
 The candidate adds Session launch settings, scene tempo and meter overrides, Simpler sample controls, and additional mixer controls.
@@ -40,7 +66,7 @@ These ten tools expose native controls rather than high-level composition reques
 They include inspection, validated writes, observed values, and structured unsupported responses.
 Mode changes require a separate inspection before mode-dependent writes.
 Settings tools manage their own undo groups and run outside `batch_commands`.
-Actual Live acceptance remains pending.
+Acceptance is complete by explicit user override. The acceptance record retains the observed results and unverified checks.
 
 ## Advanced Live-only installation
 

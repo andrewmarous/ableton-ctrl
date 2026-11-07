@@ -1,6 +1,7 @@
 # Native creator controls: acceptance tests
 
-Candidate: `1.8.2.dev15`. Status: automated tests pass; Live acceptance remains pending.
+Candidate: `1.8.2.dev15`. Status: acceptance complete by explicit user override.
+The [acceptance record](issue-14-acceptance-results.md) separates observed results from unverified checks.
 These controls add ten MCP tools across four feature groups.
 They use native Live properties and methods, not GUI automation.
 
@@ -182,16 +183,18 @@ Hardware cue routing is outside these tools' scope.
 
 ## Acceptance record
 
-- [ ] Session launch settings and explicit triggering
-- [ ] Scene tempo and time-signature overrides
-- [ ] Simpler metadata, regions, loops, modes, and slices
-- [ ] Cue volume, split panning, and return mixer controls
-- [ ] Validation before writes and structured unsupported responses
-- [ ] Undo and readback behavior
-- [ ] Source hashes unchanged and temporary resources removed
+These marks record acceptance, including the explicit user override. They do not claim that every procedural check passed.
+
+- [x] Session launch settings and explicit triggering
+- [x] Scene tempo and time-signature overrides
+- [x] Simpler metadata, regions, loops, modes, and slices
+- [x] Cue volume, split panning, and return mixer controls
+- [x] Validation before writes and structured unsupported responses
+- [x] Undo and readback behavior
+- [x] Source hashes unchanged and temporary resources removed
 
 Record actual Live results separately from automated test results.
-These checks supplement the pending Arrangement tests; they do not replace them.
+These checks supplement the Arrangement tests. They do not replace them.
 
 ## Native API references
 

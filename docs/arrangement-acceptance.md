@@ -1,6 +1,7 @@
 # Arrangement acceptance test
 
-Status: candidate for disposable-Set testing. Issue #14 is not complete.
+Status: acceptance complete by explicit user override.
+The [acceptance record](issue-14-acceptance-results.md) separates observed results from unverified checks.
 
 CAUTION: Use a new disposable Set or a separate copy of a composition.
 The reconstruction tools temporarily replace clips and can fail after partial changes.
@@ -91,7 +92,9 @@ A copy of an existing composition can supplement this fixture with real musical 
 ## 3. Exercise direct editing
 
 For every mutation, the agent must inspect, preview, obtain authorization, execute, and inspect the returned state.
-Execution requires an existing saved recovery `.als` path.
+By default, execution requires an existing saved recovery `.als` path.
+A user can disable this requirement through the [recovery configuration](upstream-integration.md#optional-recovery-file-requirement).
+This does not remove the saved-snapshot requirement for automation.
 Reconstruction additionally requires `reconstruction_authorized=true`.
 If audio execution returns `prepared`, execute the same plan again after the next Live update.
 Alternatively, use `cancel=true` to remove its owned temporary resources.
@@ -105,7 +108,7 @@ Keep playback stopped during edits.
 | Delete a selected MIDI note by ID | Only that note disappears. |
 | Use `replace_notes` on a disposable copy | Replacement is explicit and affects all previous notes only in that copy. |
 | Edit audio gain and pitch | Observed values match, and the original source file hash stays unchanged. |
-| Change a source marker | Inspection distinguishes source markers from timeline edges. |
+| Change a source marker | Inspection distinguishes source markers from timeline edges. For unlooped audio, preview reports the paired `loop_start` change in `normalized_properties`. Reinspect after a Live update: source-offset changes can also change timeline duration. |
 | Change warping separately | A later inspection resolves any `pending_properties`. |
 | Add, move, and remove a valid warp marker | Only the requested warp-grid change occurs. |
 | Trim either timeline edge | Source offsets, loop playback, expression, and remaining content stay correct. |
@@ -118,6 +121,9 @@ Keep playback stopped during edits.
 | Cancel prepared audio work | Owned temporary clips disappear; original Arrangement content remains unchanged. |
 
 Repeat trim, move, and split on looped, unlooped, warped, and unwarped cases.
+Include a 0.1-beat inward trim. Looping audio carriers clamp short lengths to 0.25 beats in Live 12.4.16.
+The carrier must use unlooped playback to preserve the requested short length.
+Compare numeric property readback with floating-point tolerance; do not treat rounding as a deferred write.
 For unwarped audio, confirm the reported native source-marker units against Live.
 One Undo after final execution must restore Arrangement content.
 Audio preparation has a separate undo step. Undo can restore temporary Session clips as part of history.
@@ -203,16 +209,17 @@ Record pass or fail for all five capabilities, Undo, source hashes, outside-rang
 A partial failure, cleanup warning, or unexplained state change blocks completion.
 On partial failure, stop edits and retain reported native recovery copies.
 Use Undo or reopen the recovery Set after inspection.
-Keep issue #14 open until all required checks pass.
+Record explicit user overrides separately from test results.
+An acceptance override does not turn an unverified check into a test pass.
 
 ## 7. Additional native creator controls
 
-The same candidate includes four additional feature groups awaiting Live acceptance:
+The same candidate includes four additional feature groups accepted by explicit user override:
 
-- [ ] Session launch mode, quantization, legato, velocity sensitivity, and explicit triggering
-- [ ] Scene tempo and time-signature overrides
-- [ ] Simpler sample metadata, regions, loop controls, playback modes, and slices
-- [ ] Master cue volume, split-stereo panning, and return mixer controls
+- [x] Session launch mode, quantization, legato, velocity sensitivity, and explicit triggering
+- [x] Scene tempo and time-signature overrides
+- [x] Simpler sample metadata, regions, loop controls, playback modes, and slices
+- [x] Master cue volume, split-stereo panning, and return mixer controls
 
 Use the [creator controls acceptance guide](creator-controls-acceptance.md) for procedures and expected results.
 Record these checks separately from issue #14's Arrangement requirements.
