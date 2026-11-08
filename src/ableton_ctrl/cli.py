@@ -112,7 +112,7 @@ def main() -> int:
             saved = read_configuration()
             device = args.audio_device if args.audio_device is not None else saved.get("audio_device")
             if args.audio_device is not None and (
-                not device.strip() or device.lower() in {"default", "none"} or ":" in device
+                not args.audio_device.strip() or args.audio_device.lower() in {"default", "none"} or ":" in args.audio_device
             ):
                 raise ValueError("Choose an explicit loopback name or audio ID from ableton audio devices.")
             if not args.knowledge_only:

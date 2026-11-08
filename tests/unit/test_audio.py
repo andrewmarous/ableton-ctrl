@@ -131,6 +131,7 @@ def test_capture_command_and_cleanup(monkeypatch, tmp_path, fail):
         assert commands[0][commands[0].index("-i") + 1] == ":BlackHole 2ch"
         assert "-xerror" in commands[0]
         assert "-nostdin" in commands[0]
+        assert commands[0][commands[0].index("-af") + 1] == "aresample=async=1:first_pts=0"
 
 
 @pytest.mark.parametrize("device", ["", "default", "none", "video:audio"])

@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import uuid
+from typing import Any
 
 
 from .config import read_configuration
@@ -28,7 +29,7 @@ def configured_device() -> str | None:
     return value
 
 
-def diagnostics() -> dict:
+def diagnostics() -> dict[str, Any]:
     """Check installed tools without opening an input or starting Live playback."""
     ffmpeg = shutil.which("ffmpeg")
     ffprobe = shutil.which("ffprobe")
@@ -60,7 +61,7 @@ def diagnostics() -> dict:
     }
 
 
-def require_environment() -> dict:
+def require_environment() -> dict[str, Any]:
     result = diagnostics()
     if not result["inspection_ready"]:
         raise RuntimeError(
@@ -94,7 +95,7 @@ def artifact_path(suffix: str) -> Path:
     return root / f"{uuid.uuid4().hex}{suffix}"
 
 
-def list_devices() -> list[dict]:
+def list_devices() -> list[dict[str, Any]]:
     if platform.system() != "Darwin":
         raise RuntimeError("Live capture currently supports macOS AVFoundation inputs only.")
     # AVFoundation returns a nonzero status after listing devices without opening one.
@@ -123,7 +124,7 @@ def list_devices() -> list[dict]:
     ]
 
 
-def probe_audio(path: Path) -> dict:
+def probe_audio(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise ValueError(f"Audio file does not exist: {path}")
     info = json.loads(
@@ -158,7 +159,7 @@ def probe_audio(path: Path) -> dict:
     }
 
 
-def capture_audio(seconds: float, device: str, channels: int = 2, samplerate: int = 48000) -> dict:
+def capture_audio(seconds: float, device: str, channels: int = 2, samplerate: int = 48000) -> dict[str, Any]:
     if not math.isfinite(seconds) or not 0 < seconds <= 300:
         raise ValueError("Duration must be greater than zero and at most 300 seconds.")
     if channels not in (1, 2) or not 8000 <= samplerate <= 192000:
@@ -190,6 +191,9 @@ def capture_audio(seconds: float, device: str, channels: int = 2, samplerate: in
                 "avfoundation",
                 "-i",
                 f":{device}",
+                # Preserve input timing: fill timestamp gaps instead of shortening the WAV.
+                "-af",
+                "aresample=async=1:first_pts=0",
                 "-t",
                 str(seconds),
                 "-map",
@@ -221,7 +225,7 @@ def finite(value: str) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
-def parse_measurements(log: str, duration: float) -> dict:
+def parse_measurements(log: str, duration: float) -> dict[str, Any]:
     """Extract FFmpeg summaries; preserve the raw log alongside the report."""
     for count in re.findall(r"Number of (?:NaNs|Infs):\s*(\S+)", log):
         if float(count) > 0:
@@ -255,7 +259,7 @@ def parse_measurements(log: str, duration: float) -> dict:
     }
 
 
-def inspect_audio(path: str) -> dict:
+def inspect_audio(path: str) -> dict[str, Any]:
     source = Path(path).expanduser().resolve()
     ffmpeg = executable("ffmpeg")
     info = probe_audio(source)
@@ -352,6 +356,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def execute(args: argparse.Namespace) -> int:
+    result: dict[str, Any] | list[dict[str, Any]]
     try:
         if args.audio_command == "doctor":
             result = diagnostics()
