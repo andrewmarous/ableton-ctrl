@@ -120,9 +120,7 @@ def main() -> int:
                 print("Audio: FFmpeg capture and inspection commands and Pi skill guidance are included.")
             print(f"Loopback input: {device or 'not configured; run ableton setup --audio-device NAME'}")
             if not args.knowledge_only:
-                if not shutil.which("uvx"):
-                    raise ValueError("Install uv first, or use --knowledge-only.")
-                print("Install pinned AbletonMCP Remote Script and merge Pi configuration; existing files receive backups.")
+                print("Install the dependency’s AbletonMCP Remote Script and merge Pi configuration; existing files receive backups.")
             paths = [configuration()]
             if not root.exists():
                 paths.append(root)
@@ -143,7 +141,7 @@ def main() -> int:
                 if args.install_whisper:
                     print(f"Transcriber: {whisper_install.install(Path.home(), args.backend)}")
                 if not args.knowledge_only:
-                    upstream.install(Path.home(), shutil.which("uvx") or "uvx", args.user_library, wiki_path=root)
+                    upstream.install(Path.home(), sys.executable, args.user_library, wiki_path=root)
                 saved.update({"schema_version": 1, "knowledge_base": str(root)})
                 if args.audio_device is not None:
                     saved["audio_device"] = args.audio_device
@@ -165,7 +163,7 @@ def main() -> int:
             print(whisper_install.install(Path.home(), args.backend, args.jobs))
         elif args.command == "doctor":
             missing = []
-            for executable in ("uvx", "pi", "ffmpeg", "ffprobe", "yt-dlp"):
+            for executable in ("pi", "ffmpeg", "ffprobe", "yt-dlp"):
                 found = shutil.which(executable)
                 print(f"{executable}: {found or 'missing'}")
                 if not found:
@@ -180,12 +178,10 @@ def main() -> int:
                 return 1
             findings = kb.lint(root)
             print(json.dumps(findings, indent=2))
-            if shutil.which("uvx"):
-                command = upstream.command("uvx", "doctor", "--json")
-                if args.user_library:
-                    command += ["--user-library", args.user_library]
-                return subprocess.run(command).returncode or int(bool(findings or missing or not audio_status["inspection_ready"]))
-            return int(bool(findings or missing or not audio_status["inspection_ready"]))
+            command = upstream.command(sys.executable, "doctor", "--json")
+            if args.user_library:
+                command += ["--user-library", args.user_library]
+            return subprocess.run(command).returncode or int(bool(findings or missing or not audio_status["inspection_ready"]))
         elif args.command == "chat":
             return subprocess.run(["pi", f"Use the production knowledge at {root}. Separate source evidence from observed Live facts. Do not edit Live without explicit permission."]).returncode
         elif args.action == "import":

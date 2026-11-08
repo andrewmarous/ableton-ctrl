@@ -78,7 +78,7 @@ def test_upstream_partial_failure_restores_remote_and_pi(tmp_path):
 
     with patch("ableton_ctrl.upstream.subprocess.run", side_effect=fail):
         with pytest.raises(subprocess.CalledProcessError):
-            upstream.install(tmp_path, "uvx")
+            upstream.install(tmp_path, "/bin/python")
     assert remote.read_text() == "working plugin"
     assert config.read_bytes() == original
 
@@ -94,7 +94,7 @@ def test_upstream_late_failure_restores_remote(tmp_path):
         "ableton_ctrl.wiki_templates.artifact_text", side_effect=OSError("disk error")
     ):
         with pytest.raises(OSError):
-            upstream.install(tmp_path, "uvx")
+            upstream.install(tmp_path, "/bin/python")
     assert not remote.exists()
     assert not (tmp_path / ".pi/agent/mcp.json").exists()
 
